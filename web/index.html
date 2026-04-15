@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lunar Orbit Explorer</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+
+  <!-- HUD overlay -->
+  <div id="hud">
+    <div class="hud-title">Lunar Orbit Explorer</div>
+    <div class="hud-section">
+      <span class="hud-label">Altitude</span>
+      <span class="hud-value" id="hud-alt">—</span>
+      <span class="hud-unit">km</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">Speed</span>
+      <span class="hud-value" id="hud-vel">—</span>
+      <span class="hud-unit">km/s</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">Elapsed</span>
+      <span class="hud-value" id="hud-time">—</span>
+      <span class="hud-unit"></span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">Period</span>
+      <span class="hud-value" id="hud-period">~118.7</span>
+      <span class="hud-unit">min</span>
+    </div>
+    <div class="hud-divider"></div>
+    <div class="hud-controls">
+      <button id="btn-play" class="hud-btn active">▶ Play</button>
+      <button id="btn-pause" class="hud-btn">⏸ Pause</button>
+      <button id="btn-reset" class="hud-btn">↺ Reset</button>
+    </div>
+    <div class="hud-controls">
+      <label class="hud-label" for="warp-slider">Time Warp</label>
+      <input type="range" id="warp-slider" min="0" max="5" step="1" value="2" />
+      <span class="hud-value" id="warp-label">100×</span>
+    </div>
+    <div id="status-bar">Loading WASM…</div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
