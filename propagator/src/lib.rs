@@ -3,6 +3,7 @@ use js_sys::Float64Array;
 
 mod integrator;
 mod frames;
+mod coefficients;
 use integrator::{State, propagate};
 
 // Lunar standard gravitational parameter (km³/s²)
