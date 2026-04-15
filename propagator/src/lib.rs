@@ -5,6 +5,7 @@ mod integrator;
 mod frames;
 mod coefficients;
 mod gravity;
+mod third_body;
 use integrator::{State, propagate};
 
 // Lunar standard gravitational parameter (km³/s²)

@@ -97,12 +97,13 @@ mod tests {
 
     #[test]
     fn j2_value_in_range() {
-        // GRGM1200A C_20 (fully normalised) ≈ −9.095×10⁻⁴.
+        // GRGM1200A C_20 (fully normalised) ≈ −9.09×10⁻⁵
+        // (J2_Moon ≈ 2.034×10⁻⁴; C20_norm = −J2/√5 ≈ −9.09×10⁻⁵).
         let c = Coefficients::from_bundle(4);
         let (c20, _) = c.get(2, 0);
         assert!(
-            c20 < -8.0e-4 && c20 > -1.0e-3,
-            "C20 = {:.6e} out of expected GRGM1200A range (−8e−4, −1e−3)", c20
+            c20 < -8.0e-5 && c20 > -1.0e-4,
+            "C20 = {:.6e} out of expected GRGM1200A range (−8e−5, −1e−4)", c20
         );
     }
 

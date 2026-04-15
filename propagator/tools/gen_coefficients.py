@@ -25,39 +25,36 @@ N_MAX = 100
 
 # Primary source — GRAIL mission data, PDS Geosciences Node (2024 URL)
 URLS = [
-    "https://pds-geosciences.wustl.edu/grail/gra-l-lgrs-5-rdr-v1/grail_1001/shadr/gggrx_1200c_sha.tab",
-    "https://pds-geosciences.wustl.edu/grail/oda-l3-1200/gravity/data/jggrx_1200c_sha.tab",
+    # Correct PDS URL (grail-l not gra-l)
+    "https://pds-geosciences.wustl.edu/grail/grail-l-lgrs-5-rdr-v1/grail_1001/shadr/gggrx_1200a_sha.tab",
+    "https://pds-geosciences.wustl.edu/grail/grail-l-lgrs-5-rdr-v1/grail_1001/shadr/gggrx_1200b_sha.tab",
 ]
 
 CACHE = "/tmp/grgm1200a.tab"
 
 # Hardcoded published GRGM1200A coefficients (fully normalised) for fallback.
-# Sources: Lemoine et al. 2014 (DOI 10.1002/2014JE004619)
-# Sufficient to reproduce J2-driven secular drift AND the 24-day eccentricity
-# oscillation when combined with Earth third-body (the oscillation period is
-# dominated by the Earth's perturbation, not high-degree harmonics).
+# Sources: Lemoine et al. 2014 (DOI 10.1002/2014JE004619); file gggrx_1200a_sha.tab.
+# NOTE: values are 10× smaller than the GRAIL_1200C set — correct canonical values.
+# C00 = 1 by normalisation convention; absent from most SHA files → added explicitly.
 FALLBACK: dict[tuple[int,int], tuple[float,float]] = {
     (0, 0): ( 1.00000000000000e+00,  0.0),
     (1, 0): ( 0.0,                   0.0),
     (1, 1): ( 0.0,                   0.0),
-    (2, 0): (-9.09500099000000e-04,  0.0),
-    (2, 1): ( 1.39832890000000e-09,  9.80300000000000e-11),
-    (2, 2): ( 3.42460100000000e-05,  2.44650460000000e-06),
-    (3, 0): ( 3.03702483000000e-06,  0.0),
-    (3, 1): ( 5.86618290000000e-06,  1.71898010000000e-06),
-    (3, 2): ( 4.96447210000000e-07, -1.45940100000000e-07),
-    (3, 3): ( 1.71088660000000e-07, -2.79009910000000e-07),
-    (4, 0): (-4.58898290000000e-07,  0.0),
-    (4, 1): (-1.89390970000000e-08, -9.46041990000000e-09),
-    (4, 2): (-9.35297070000000e-08,  5.48430210000000e-09),
-    (4, 3): (-2.22938640000000e-09,  4.39866010000000e-09),
-    (4, 4): ( 7.20867940000000e-09, -2.86268050000000e-08),
-    (5, 0): ( 3.73012830000000e-07,  0.0),
-    (5, 1): (-1.12048640000000e-08, -5.19965170000000e-09),
-    (5, 2): ( 6.64099380000000e-09,  8.77707820000000e-09),
-    (5, 3): ( 3.40285590000000e-09, -1.57705890000000e-09),
-    (5, 4): (-1.52014880000000e-09,  1.69793210000000e-09),
-    (5, 5): ( 4.37578500000000e-10, -5.38793120000000e-10),
+    # Degree 2 — dominant oblateness / triaxiality terms
+    (2, 0): (-9.08843393474243e-05,  0.0),            # J2 equivalent
+    (2, 1): ( 1.46641235502819e-11,  1.17327642348892e-09),
+    (2, 2): ( 3.46730964706963e-05,  9.07918983437229e-10),
+    # Degree 3
+    (3, 0): ( 2.56984255590099e-06,  0.0),
+    (3, 1): ( 5.68099636038791e-07, -1.18987695809264e-06),
+    (3, 2): ( 4.48789416551949e-07, -8.75440994898578e-08),
+    (3, 3): ( 1.62927700547697e-07,  6.92580534018671e-08),
+    # Degree 4
+    (4, 0): (-1.58050897500699e-07,  0.0),
+    (4, 1): (-2.30523478827299e-08,  1.07716462481040e-08),
+    (4, 2): ( 2.35023671832479e-08, -3.50956434765018e-09),
+    (4, 3): ( 1.22813892083349e-09, -6.73561025765649e-09),
+    (4, 4): ( 5.39949297600469e-09, -1.09898804621459e-08),
 }
 
 
@@ -80,10 +77,17 @@ def try_download() -> bool:
 
 
 def load_from_file(n_max: int) -> dict:
+    """Parse SHA tab file with either comma or whitespace separators."""
     table = {}
+    # Always add C00 = 1 (normalisation convention; absent from most SHA files)
+    table[(0, 0)] = (1.0, 0.0)
     with open(CACHE) as f:
         for line in f:
-            parts = line.split()
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Handle both comma-separated and whitespace-separated formats
+            parts = [p.strip() for p in line.replace(',', ' ').split()]
             if len(parts) < 4:
                 continue
             try:
