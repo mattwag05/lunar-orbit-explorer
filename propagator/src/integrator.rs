@@ -11,12 +11,14 @@ pub type State = [f64; 6];
 
 /// Scale a state by a scalar.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn scale(s: &State, h: f64) -> State {
     [s[0]*h, s[1]*h, s[2]*h, s[3]*h, s[4]*h, s[5]*h]
 }
 
 /// Add two states element-wise.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn add(a: &State, b: &State) -> State {
     [a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3], a[4]+b[4], a[5]+b[5]]
 }
@@ -163,55 +165,57 @@ const ER12: f64 = -2.235530786388629525884427845e-2;
 
 /// Attempt one adaptive DOP853 step.
 ///
-/// `deriv_fn`: closure f(state) → d/dt(state). Injected so this module has
-///             no coupling to any force model.
+/// `deriv_fn`: closure f(state, time) → d/dt(state). Injected so this module
+///             has no coupling to any force model. Time is absolute (epoch-
+///             relative) so frame rotations inside the RHS are correct at
+///             every substage.
 ///
 /// Returns `(new_state, h_used, h_next, accepted)`.
-pub fn dop853_step<F>(s: &State, h: f64, atol: f64, rtol: f64, deriv_fn: &F)
+pub fn dop853_step<F>(s: &State, t0: f64, h: f64, atol: f64, rtol: f64, deriv_fn: &F)
     -> (State, f64, f64, bool)
 where
-    F: Fn(&State) -> State,
+    F: Fn(&State, f64) -> State,
 {
-    let k1  = deriv_fn(s);
+    let k1  = deriv_fn(s, t0);
 
     let s2  = wsum!(s, h, (A21, k1));
-    let k2  = deriv_fn(&s2);
+    let k2  = deriv_fn(&s2, t0 + C2 * h);
 
     let s3  = wsum!(s, h, (A31, k1), (A32, k2));
-    let k3  = deriv_fn(&s3);
+    let k3  = deriv_fn(&s3, t0 + C3 * h);
 
     let s4  = wsum!(s, h, (A41, k1), (A43, k3));
-    let k4  = deriv_fn(&s4);
+    let k4  = deriv_fn(&s4, t0 + C4 * h);
 
     let s5  = wsum!(s, h, (A51, k1), (A53, k3), (A54, k4));
-    let k5  = deriv_fn(&s5);
+    let k5  = deriv_fn(&s5, t0 + C5 * h);
 
     let s6  = wsum!(s, h, (A61, k1), (A64, k4), (A65, k5));
-    let k6  = deriv_fn(&s6);
+    let k6  = deriv_fn(&s6, t0 + C6 * h);
 
     let s7  = wsum!(s, h, (A71, k1), (A74, k4), (A75, k5), (A76, k6));
-    let k7  = deriv_fn(&s7);
+    let k7  = deriv_fn(&s7, t0 + C7 * h);
 
     let s8  = wsum!(s, h, (A81, k1), (A84, k4), (A85, k5), (A86, k6), (A87, k7));
-    let k8  = deriv_fn(&s8);
+    let k8  = deriv_fn(&s8, t0 + C8 * h);
 
     let s9  = wsum!(s, h, (A91, k1), (A94, k4), (A95, k5), (A96, k6), (A97, k7), (A98, k8));
-    let k9  = deriv_fn(&s9);
+    let k9  = deriv_fn(&s9, t0 + C9 * h);
 
     let s10 = wsum!(s, h,
         (A101, k1), (A104, k4), (A105, k5), (A106, k6),
         (A107, k7), (A108, k8), (A109, k9));
-    let k10 = deriv_fn(&s10);
+    let k10 = deriv_fn(&s10, t0 + C10 * h);
 
     let s11 = wsum!(s, h,
         (A111, k1), (A114, k4), (A115, k5), (A116, k6),
         (A117, k7), (A118, k8), (A119, k9), (A1110, k10));
-    let k11 = deriv_fn(&s11);
+    let k11 = deriv_fn(&s11, t0 + C11 * h);
 
     let s12 = wsum!(s, h,
         (A121, k1), (A124, k4), (A125, k5), (A126, k6),
         (A127, k7), (A128, k8), (A129, k9), (A1210, k10), (A1211, k11));
-    let k12 = deriv_fn(&s12);
+    let k12 = deriv_fn(&s12, t0 + h);
 
     // 8th-order solution
     let s_new = wsum!(s, h,
@@ -245,13 +249,15 @@ where
 
 /// Propagate state by exactly `dt` seconds using adaptive DOP853.
 ///
-/// `deriv_fn` is a closure returning d/dt of the state. Tolerance constants:
-/// ATOL = RTOL = 1e-11 (km, km/s — matches Phase 2 spec).
+/// `t_start`: absolute epoch-relative time at the beginning of this call [s].
+/// `deriv_fn`: closure f(state, time) → d/dt(state).
+///
+/// Tolerance constants: ATOL = RTOL = 1e-11 (km, km/s — Phase 2 spec).
 ///
 /// Returns `None` only if the integrator stalls with step size below 1 µs.
-pub fn propagate<F>(s: &State, dt: f64, deriv_fn: F) -> Option<State>
+pub fn propagate<F>(s: &State, t_start: f64, dt: f64, deriv_fn: F) -> Option<State>
 where
-    F: Fn(&State) -> State,
+    F: Fn(&State, f64) -> State,
 {
     const ATOL:  f64 = 1e-11;  // km
     const RTOL:  f64 = 1e-11;
@@ -271,8 +277,9 @@ where
     for _ in 0..200_000 {
         if t >= t_end { break; }
         let h_try = h.min(t_end - t);
+        let abs_t = t_start + sign * t;
         let (s_new, _h_used, h_next, accepted) =
-            dop853_step(&current, sign * h_try, ATOL, RTOL, &deriv_fn);
+            dop853_step(&current, abs_t, sign * h_try, ATOL, RTOL, &deriv_fn);
         if accepted {
             current = s_new;
             t      += h_try;
@@ -287,6 +294,7 @@ where
 
 // ─── c-node constants re-exported for verification ──────────────────────────
 /// DOP853 c-node values, publicly accessible for unit tests.
+#[allow(dead_code)]
 pub mod c_nodes {
     pub const C2:  f64 = super::C2;
     pub const C3:  f64 = super::C3;
@@ -321,7 +329,7 @@ mod tests {
         let s0: State = [sma, 0.0, 0.0, 0.0, v, 0.0];
         let period = 2.0 * std::f64::consts::PI * (sma.powi(3) / GM).sqrt();
 
-        let result = propagate(&s0, period, |s| two_body(s, GM)).unwrap();
+        let result = propagate(&s0, 0.0, period, |s, _t| two_body(s, GM)).unwrap();
 
         let dr = ((result[0]-s0[0]).powi(2) + (result[1]-s0[1]).powi(2) + (result[2]-s0[2]).powi(2)).sqrt();
         assert!(dr < 1e-6, "Position closure error: {:.3e} km (expected < 1e-6)", dr);
@@ -334,8 +342,8 @@ mod tests {
         const LUNAR_R: f64 = 1737.4;
         let sma = LUNAR_R + 100.0;
         let ecc = 0.01;
-        let p   = sma * (1.0 - ecc * ecc);
-        let v0  = (GM * (2.0 / sma - 1.0 / sma)).sqrt();
+        let _p  = sma * (1.0 - ecc * ecc);
+        let _v0 = (GM * (2.0 / sma - 1.0 / sma)).sqrt();
         let s0: State = [sma * (1.0 - ecc), 0.0, 0.0, 0.0, (GM * (1.0 + ecc) / (sma * (1.0 - ecc))).sqrt(), 0.0];
 
         let energy0 = |s: &State| {
@@ -346,7 +354,7 @@ mod tests {
 
         let period = 2.0 * std::f64::consts::PI * (sma.powi(3) / GM).sqrt();
         let e0 = energy0(&s0);
-        let result = propagate(&s0, period, |s| two_body(s, GM)).unwrap();
+        let result = propagate(&s0, 0.0, period, |s, _t| two_body(s, GM)).unwrap();
         let e1 = energy0(&result);
 
         let rel_err = ((e1 - e0) / e0).abs();

@@ -48,6 +48,7 @@ pub fn mci_to_mcmf(s: &State, t: f64) -> State {
 }
 
 /// MCMF state → MCI state at elapsed time `t` [s] since epoch.
+#[allow(dead_code)]
 pub fn mcmf_to_mci(s: &State, t: f64) -> State {
     let theta = OMEGA_MOON * t;
     // Add frame spin back before rotating to inertial

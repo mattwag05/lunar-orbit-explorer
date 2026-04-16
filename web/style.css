@@ -21,7 +21,7 @@ html, body {
 
 #hud {
   position: absolute;
-  top: 20px;
+  top: 12px;
   right: 20px;
   width: 240px;
   background: rgba(0, 8, 20, 0.82);
@@ -40,7 +40,7 @@ html, body {
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: #7dd3fc;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   text-align: center;
 }
 
@@ -79,7 +79,7 @@ html, body {
 .hud-divider {
   height: 1px;
   background: rgba(80, 180, 255, 0.2);
-  margin: 12px 0;
+  margin: 8px 0;
 }
 
 .hud-controls {
@@ -127,6 +127,86 @@ html, body {
   color: rgba(120, 200, 255, 0.5);
   letter-spacing: 0.5px;
   min-height: 14px;
+}
+
+/* ─── Force model panel (left side) ──────────────────────────────────── */
+
+#force-panel {
+  position: absolute;
+  top: 12px;
+  left: 20px;
+  width: 250px;
+  background: rgba(0, 8, 20, 0.82);
+  border: 1px solid rgba(80, 180, 255, 0.35);
+  border-radius: 8px;
+  padding: 12px;
+  color: #cce8ff;
+  backdrop-filter: blur(6px);
+  user-select: none;
+  z-index: 100;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+.force-option {
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.force-option label {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.force-option input[type="radio"],
+.force-option input[type="checkbox"] {
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+.force-sub {
+  margin: 6px 0 4px 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.force-sub input[type="range"] {
+  flex: 1;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+#force-panel canvas {
+  display: block;
+  width: 100%;
+  height: 60px;
+  border: 1px solid rgba(80, 180, 255, 0.15);
+  border-radius: 4px;
+  background: rgba(0, 4, 12, 0.5);
+  margin-bottom: 4px;
+}
+
+/* Scrollbar styling for dark-theme panels */
+#force-panel::-webkit-scrollbar {
+  width: 6px;
+}
+#force-panel::-webkit-scrollbar-track {
+  background: rgba(0, 8, 20, 0.4);
+  border-radius: 3px;
+}
+#force-panel::-webkit-scrollbar-thumb {
+  background: rgba(80, 180, 255, 0.3);
+  border-radius: 3px;
+}
+#force-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(80, 180, 255, 0.5);
+}
+#force-panel {
+  scrollbar-color: rgba(80, 180, 255, 0.3) rgba(0, 8, 20, 0.4);
+  scrollbar-width: thin;
 }
 
 /* Hide default Cesium toolbar/credits minimally */

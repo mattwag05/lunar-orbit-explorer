@@ -3,3 +3,4 @@ dist/
 propagator/target/
 propagator/pkg/
 .env.local
+.claude/worktrees/

@@ -78,6 +78,21 @@ impl Coefficients {
         let idx = 2 * (n * (n + 1) / 2 + m);
         (self.data[idx], self.data[idx + 1])
     }
+
+    /// Return a copy with all tesseral terms (m > 0) zeroed out.
+    #[allow(dead_code)]
+    /// Only zonal harmonics (C_n0) remain. Useful for isolating J2-type
+    /// secular perturbations without the rotating-frame C₂₂ contribution.
+    pub fn zonal_only(&self) -> Coefficients {
+        let n_pairs = (self.n_max + 1) * (self.n_max + 2) / 2;
+        let mut data = vec![0.0f64; n_pairs * 2];
+        for n in 0..=self.n_max {
+            let idx = 2 * (n * (n + 1) / 2);  // m = 0
+            data[idx]     = self.data[idx];     // C_n0
+            data[idx + 1] = self.data[idx + 1]; // S_n0 (should be 0)
+        }
+        Coefficients { n_max: self.n_max, data }
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

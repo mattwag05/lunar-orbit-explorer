@@ -9,7 +9,7 @@
 <body>
   <div id="cesiumContainer"></div>
 
-  <!-- HUD overlay -->
+  <!-- HUD overlay (right side) -->
   <div id="hud">
     <div class="hud-title">Lunar Orbit Explorer</div>
     <div class="hud-section">
@@ -44,6 +44,69 @@
       <span class="hud-value" id="warp-label">100×</span>
     </div>
     <div id="status-bar">Loading WASM…</div>
+  </div>
+
+  <!-- Force model panel (left side) -->
+  <div id="force-panel">
+    <div class="hud-title">Force Model</div>
+    <div class="force-option">
+      <label><input type="radio" name="gravity" value="pointmass" checked /> Point mass only</label>
+    </div>
+    <div class="force-option">
+      <label><input type="radio" name="gravity" value="harmonics" /> Spherical harmonics</label>
+      <div class="force-sub" id="sh-controls" style="display:none">
+        <label class="hud-label" for="sh-degree">Degree</label>
+        <input type="range" id="sh-degree" min="2" max="50" value="20" />
+        <span class="hud-value" id="sh-degree-label">20</span>
+      </div>
+    </div>
+    <div class="force-option">
+      <label><input type="checkbox" id="chk-earth" /> Earth third-body</label>
+    </div>
+    <div class="force-option">
+      <label><input type="checkbox" id="chk-sun" /> Sun third-body</label>
+    </div>
+    <div class="hud-divider"></div>
+
+    <!-- Orbital elements readout -->
+    <div class="hud-title">Orbital Elements</div>
+    <div class="hud-section">
+      <span class="hud-label">SMA</span>
+      <span class="hud-value" id="oe-sma">—</span>
+      <span class="hud-unit">km</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">ECC</span>
+      <span class="hud-value" id="oe-ecc">—</span>
+      <span class="hud-unit"></span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">INC</span>
+      <span class="hud-value" id="oe-inc">—</span>
+      <span class="hud-unit">°</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">RAAN</span>
+      <span class="hud-value" id="oe-raan">—</span>
+      <span class="hud-unit">°</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">AoP</span>
+      <span class="hud-value" id="oe-argp">—</span>
+      <span class="hud-unit">°</span>
+    </div>
+    <div class="hud-section">
+      <span class="hud-label">TA</span>
+      <span class="hud-value" id="oe-ta">—</span>
+      <span class="hud-unit">°</span>
+    </div>
+    <div class="hud-divider"></div>
+
+    <!-- Time-series plots -->
+    <div class="hud-title">Eccentricity</div>
+    <canvas id="plot-ecc" width="220" height="60"></canvas>
+    <div class="hud-title" style="margin-top:8px">Altitude (km)</div>
+    <canvas id="plot-alt" width="220" height="60"></canvas>
   </div>
 
   <script type="module" src="./main.js"></script>

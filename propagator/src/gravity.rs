@@ -101,7 +101,7 @@ pub fn gravity_sh(r: &[f64; 3], gm: f64, n_max: usize, coeff: &Coefficients) -> 
 
     // dP̄_nm/dφ via the derivative recursion (avoids 1/cos_phi singularity).
     //
-    // dP̄_nm/dφ = (n·sin_phi·P̄_nm − A_nm·P̄_{n-1,m}) / cos_phi
+    // dP̄_nm/dφ = (A_nm·P̄_{n-1,m} − n·sin_phi·P̄_nm) / cos_phi
     //
     // where A_nm = sqrt((2n+1)(n+m)(n−m) / (2n−1))
     //
@@ -128,7 +128,7 @@ pub fn gravity_sh(r: &[f64; 3], gm: f64, n_max: usize, coeff: &Coefficients) -> 
                 0.0
             };
             let p_n1m = if n >= 1 { p[idx(n-1, m)] } else { 0.0 };
-            dp[idx(n, m)] = (nf * sin_phi * p[idx(n, m)] - a_nm * p_n1m) / cos_phi;
+            dp[idx(n, m)] = (a_nm * p_n1m - nf * sin_phi * p[idx(n, m)]) / cos_phi;
         }
     }
 
@@ -166,10 +166,10 @@ pub fn gravity_sh(r: &[f64; 3], gm: f64, n_max: usize, coeff: &Coefficients) -> 
     let gm_r2 = gm / (rho * rho);
 
     // Spherical acceleration components (not yet Cartesian)
-    let a_r   = gm_r2 * sum_r;           // radial
-    let a_phi = gm_r2 * sum_phi / rho;   // geocentric latitude direction (1/r · ∂V/∂φ)
+    let a_r   = gm_r2 * sum_r;           // radial:    ∂V/∂r
+    let a_phi = gm_r2 * sum_phi;         // latitude:  (1/r)·∂V/∂φ  = (GM/r²)·sum_phi
     let a_lam = if cos_phi > POLE_EPS {
-        gm_r2 * sum_lam / (rho * cos_phi) // longitude direction (1/(r cosφ) · ∂V/∂λ)
+        gm_r2 * sum_lam / cos_phi        // longitude: (1/(r cosφ))·∂V/∂λ = (GM/r²)·sum_lam/cosφ
     } else {
         0.0
     };
