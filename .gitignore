@@ -4,3 +4,8 @@ propagator/target/
 propagator/pkg/
 .env.local
 .claude/worktrees/
+
+# Agent docs and local tooling (kept out of the public repo)
+CLAUDE.md
+AGENTS.md
+.beads/

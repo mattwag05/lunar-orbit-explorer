@@ -40,7 +40,7 @@ The DOP853 (Dormand-Prince order 8 with order 5 and order 3 dense-output) is a 1
 
 - [ ] **Step 1.1 — Write the new `integrator.rs` file**
 
-Create `/Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator/src/integrator.rs` with this exact content:
+Create `~/Projects/lunar-orbit-explorer/propagator/src/integrator.rs` with this exact content:
 
 ```rust
 //! DOP853: Dormand-Prince order-8(5,3) adaptive integrator.
@@ -363,7 +363,7 @@ pub fn step(&mut self, dt: f64) -> bool {
 - [ ] **Step 1.3 — Verify the tests still compile and pass**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test 2>&1 | tail -20
 ```
 
@@ -374,7 +374,7 @@ If any test fails, it is most likely a coefficient typo in the Butcher tableau. 
 - [ ] **Step 1.4 — Commit**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer
+cd ~/Projects/lunar-orbit-explorer
 git add propagator/src/integrator.rs propagator/src/lib.rs
 git commit -m "feat(propagator): replace DP45 with DOP853 adaptive integrator (1e-11 tolerance)"
 ```
@@ -493,7 +493,7 @@ Add `mod frames;` below `mod integrator;` in `lib.rs`.
 - [ ] **Step 2.3 — Run frames tests**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test frames 2>&1
 ```
 
@@ -518,7 +518,7 @@ Coefficients are stored as a flat `Vec<f64>` with layout `[C_00, S_00, C_10, S_1
 
 - [ ] **Step 3.1 — Create the coefficient generator script**
 
-Create `/Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator/tools/gen_coefficients.py`:
+Create `~/Projects/lunar-orbit-explorer/propagator/tools/gen_coefficients.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -628,8 +628,8 @@ if __name__ == "__main__":
 - [ ] **Step 3.2 — Run the generator to create the binary blob**
 
 ```bash
-mkdir -p /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator/data
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+mkdir -p ~/Projects/lunar-orbit-explorer/propagator/data
+cd ~/Projects/lunar-orbit-explorer/propagator
 python3 tools/gen_coefficients.py
 ```
 
@@ -642,7 +642,7 @@ Wrote …/data/grgm1200a_100x100.bin (82420 bytes)
 
 Verify the file exists and is non-zero:
 ```bash
-ls -la /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator/data/grgm1200a_100x100.bin
+ls -la ~/Projects/lunar-orbit-explorer/propagator/data/grgm1200a_100x100.bin
 ```
 
 - [ ] **Step 3.3 — Create `coefficients.rs`**
@@ -757,7 +757,7 @@ Add `mod coefficients;` below `mod frames;` in `lib.rs`.
 - [ ] **Step 3.5 — Run coefficients tests**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test coefficients 2>&1
 ```
 
@@ -986,7 +986,7 @@ Add `mod gravity;` below `mod coefficients;` in `lib.rs`.
 - [ ] **Step 4.3 — Run gravity tests**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test gravity 2>&1
 ```
 
@@ -1134,7 +1134,7 @@ Add `mod third_body;` below `mod gravity;` in `lib.rs`.
 - [ ] **Step 5.3 — Run third_body tests**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test third_body 2>&1
 ```
 
@@ -1426,7 +1426,7 @@ pub fn cartesian_to_keplerian(s: &State, gm: f64) -> [f64; 6] {
 - [ ] **Step 6.3 — Verify full build and existing tests pass**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test 2>&1 | tail -30
 ```
 
@@ -1576,7 +1576,7 @@ Inside the existing `#[cfg(test)] mod tests { … }` block, add:
 - [ ] **Step 7.2 — Run the new validation tests**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 cargo test j2 -- --nocapture 2>&1
 cargo test point_mass_energy -- --nocapture 2>&1
 ```
@@ -1609,7 +1609,7 @@ git commit -m "test(propagator): add J2 secular drift validation tests (RAAN + a
 - [ ] **Step 8.1 — Rebuild WASM**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator
+cd ~/Projects/lunar-orbit-explorer/propagator
 wasm-pack build --target web 2>&1 | tail -10
 ```
 
@@ -1619,7 +1619,7 @@ The `propagator/pkg/` directory gains updated `propagator.js`, `propagator_bg.wa
 Verify the new API is exported:
 ```bash
 grep -E "set_gravity_degree|load_coefficients|enable_third_body|get_orbital_elements" \
-    /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/propagator/pkg/propagator.d.ts
+    ~/Projects/lunar-orbit-explorer/propagator/pkg/propagator.d.ts
 ```
 
 Expected: 4 lines matching the four new methods.
@@ -1634,7 +1634,7 @@ Expected: 4 lines matching the four new methods.
 - [ ] **Step 9.1 — Read the current `index.html`**
 
 ```bash
-cat /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/web/index.html
+cat ~/Projects/lunar-orbit-explorer/web/index.html
 ```
 
 - [ ] **Step 9.2 — Add new HUD sections to `index.html`**
@@ -1712,7 +1712,7 @@ git commit -m "feat(ui): add force model panel, orbital elements, and plot canva
 
 - [ ] **Step 10.1 — Add new CSS rules to `style.css`**
 
-Append to the end of `/Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer/web/style.css`:
+Append to the end of `~/Projects/lunar-orbit-explorer/web/style.css`:
 
 ```css
 /* ─── Force model panel ───────────────────────────────────────────────── */
@@ -1925,7 +1925,7 @@ At the end of `resetOrbit()`, add:
 - [ ] **Step 11.7 — Start the dev server and verify the UI**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer
+cd ~/Projects/lunar-orbit-explorer
 npm run dev
 ```
 
@@ -1975,7 +1975,7 @@ Open the browser console and check `window.propagator.get_time()` at a few eccen
 - [ ] **Step 12.4 — Final commit**
 
 ```bash
-cd /Users/matthewwagner/Desktop/Projects/lunar-orbit-explorer
+cd ~/Projects/lunar-orbit-explorer
 git add -A
 git commit -m "chore: Phase 2 validation — 24-day eccentricity oscillation confirmed"
 ```
