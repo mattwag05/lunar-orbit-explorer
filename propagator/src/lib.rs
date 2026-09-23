@@ -9,7 +9,7 @@ mod third_body;
 
 use integrator::{State, propagate};
 use coefficients::Coefficients;
-use gravity::gravity_sh;
+use gravity::{gravity_sh, free_air_anomaly_grid};
 use frames::{mci_to_mcmf, rotate_vec_mcmf_to_mci};
 use third_body::{earth_mci, sun_mci, third_body_accel, GM_EARTH, GM_SUN};
 
@@ -291,6 +291,43 @@ impl Propagator {
             arr.set_index(i as u32, v);
         }
         arr
+    }
+
+    // ── Gravity field inspection ────────────────────────────────
+
+    /// Degree actually loaded from the coefficient blob, or 0 when none is loaded.
+    pub fn get_loaded_degree(&self) -> u32 {
+        self.coefficients.as_ref().map_or(0, |c| c.n_max as u32)
+    }
+
+    /// Number of (C_nm, S_nm) pairs for the loaded degree: (n+1)(n+2)/2,
+    /// or 0 when no coefficients are loaded.
+    pub fn get_coefficient_count(&self) -> u32 {
+        self.coefficients.as_ref().map_or(0, |c| ((c.n_max + 1) * (c.n_max + 2) / 2) as u32)
+    }
+
+    /// Surface free-air gravity anomaly [mGal], row-major over a
+    /// vertex-registered grid (row 0 at +90° latitude, column 0 at −180°
+    /// longitude, both edges inclusive). Uses the loaded coefficients when
+    /// they reach `degree`, otherwise the bundled GRGM1200A truncated to it.
+    pub fn gravity_anomaly_grid(&self, n_lat: u32, n_lon: u32, degree: u32) -> Float64Array {
+        let grid = self.anomaly_grid_vec(n_lat as usize, n_lon as usize, degree as usize);
+        Float64Array::from(grid.as_slice())
+    }
+}
+
+impl Propagator {
+    /// Native-only state accessor for validation tooling (`examples/`).
+    /// Not exported to JavaScript; `get_state` is the WASM API.
+    #[doc(hidden)]
+    pub fn state_vec(&self) -> [f64; 6] { self.state }
+
+    fn anomaly_grid_vec(&self, n_lat: usize, n_lon: usize, degree: usize) -> Vec<f64> {
+        let degree = degree.min(100);
+        match self.coefficients.as_ref() {
+            Some(c) if c.n_max >= degree => free_air_anomaly_grid(n_lat, n_lon, degree, self.gm, c),
+            _ => free_air_anomaly_grid(n_lat, n_lon, degree, self.gm, &Coefficients::from_bundle(degree)),
+        }
     }
 }
 
@@ -634,5 +671,32 @@ mod tests {
             amplitude);
         eprintln!("Eagle ecc range: {:.6} to {:.6} (amplitude {:.6})",
             ecc_min, ecc_max, amplitude);
+    }
+
+    #[test]
+    fn loaded_degree_and_coefficient_count() {
+        let mut p = Propagator::new();
+        assert_eq!(p.get_loaded_degree(), 0);
+        assert_eq!(p.get_coefficient_count(), 0);
+        p.set_gravity_degree(u32::MAX);
+        assert_eq!(p.get_loaded_degree(), 100);
+        assert_eq!(p.get_coefficient_count(), 5151);
+        let expect = Coefficients::from_bundle(100).n_max as u32;
+        assert_eq!(p.get_loaded_degree(), expect);
+        let mut q = Propagator::new();
+        q.set_gravity_degree(20);
+        assert_eq!(q.get_loaded_degree(), 20);
+        assert_eq!(q.get_coefficient_count(), 231);
+    }
+
+    #[test]
+    fn anomaly_grid_vec_degree0_flat_and_sized() {
+        let p = Propagator::new();
+        let g = p.anomaly_grid_vec(10, 20, 0);
+        assert_eq!(g.len(), 200);
+        assert!(g.iter().all(|&v| v == 0.0));
+        let g = p.anomaly_grid_vec(10, 20, 20);
+        assert_eq!(g.len(), 200);
+        assert!(g.iter().any(|&v| v != 0.0));
     }
 }

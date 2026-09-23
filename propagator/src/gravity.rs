@@ -198,6 +198,65 @@ pub fn gravity_sh(r: &[f64; 3], gm: f64, n_max: usize, coeff: &Coefficients) -> 
     [ax, ay, az]
 }
 
+/// Surface free-air gravity anomaly [mGal] on a regular lat/lon grid.
+///
+/// Δg(φ, λ) = (GM/R²) Σ_{n=2..N} (n−1) Σ_m P̄_nm(sin φ)(C_nm cos mλ + S_nm sin mλ),
+/// evaluated on the reference sphere r = R_REF. Degrees 0 and 1 carry no
+/// anomaly, so `degree` < 2 yields a flat zero field.
+///
+/// Grid is vertex-registered and row-major: row i has latitude
+/// 90° − i·180°/(n_lat−1), column j has east longitude −180° + j·360°/(n_lon−1),
+/// so both poles and both ±180° edges are included. `n_lat` and `n_lon`
+/// below 2 are raised to 2.
+pub fn free_air_anomaly_grid(
+    n_lat: usize, n_lon: usize, degree: usize, gm: f64, coeff: &Coefficients,
+) -> Vec<f64> {
+    let n_lat = n_lat.max(2);
+    let n_lon = n_lon.max(2);
+    let n_max = degree.min(coeff.n_max);
+    let mut out = vec![0.0f64; n_lat * n_lon];
+    if n_max < 2 {
+        return out;
+    }
+
+    // km/s² → mGal (1 mGal = 1e-5 m/s² = 1e-8 km/s²)
+    let scale = gm / (R_REF * R_REF) * 1.0e8;
+    let mut p = vec![0.0f64; (n_max + 1) * (n_max + 2) / 2];
+    let mut a_m = vec![0.0f64; n_max + 1];
+    let mut b_m = vec![0.0f64; n_max + 1];
+    let lons: Vec<f64> = (0..n_lon)
+        .map(|j| (-180.0 + j as f64 * 360.0 / (n_lon - 1) as f64).to_radians())
+        .collect();
+
+    for i in 0..n_lat {
+        let phi = (90.0 - i as f64 * 180.0 / (n_lat - 1) as f64).to_radians();
+        alf_table(n_max, phi.sin(), phi.cos().max(0.0), &mut p);
+
+        // Collapse the degree sum per order, then only the λ sum remains.
+        for m in 0..=n_max {
+            let (mut a, mut b) = (0.0, 0.0);
+            for n in m.max(2)..=n_max {
+                let (c, s) = coeff.get(n, m);
+                let w = (n as f64 - 1.0) * p[n*(n+1)/2 + m];
+                a += w * c;
+                b += w * s;
+            }
+            a_m[m] = a;
+            b_m[m] = b;
+        }
+
+        for (j, &lam) in lons.iter().enumerate() {
+            let mut sum = 0.0;
+            for m in 0..=n_max {
+                let ml = m as f64 * lam;
+                sum += a_m[m] * ml.cos() + b_m[m] * ml.sin();
+            }
+            out[i * n_lon + j] = scale * sum;
+        }
+    }
+    out
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -378,5 +437,53 @@ mod tests {
         let mag = (a[0]*a[0] + a[1]*a[1] + a[2]*a[2]).sqrt();
         assert!(mag > 0.001 && mag < 0.002,
             "|a| = {:.5e} km/s² out of expected range [0.001, 0.002]", mag);
+    }
+
+    #[test]
+    fn anomaly_grid_degree0_is_flat_and_sized() {
+        let c = Coefficients::from_bundle(100);
+        for deg in [0usize, 1] {
+            let g = free_air_anomaly_grid(19, 37, deg, GM, &c);
+            assert_eq!(g.len(), 19 * 37);
+            assert!(g.iter().all(|&v| v == 0.0), "degree {deg} must be flat");
+        }
+        let g = free_air_anomaly_grid(19, 37, 100, GM, &c);
+        assert_eq!(g.len(), 19 * 37, "extent must match requested resolution");
+    }
+
+    #[test]
+    fn anomaly_grid_matches_pointwise_sum() {
+        // Spot-check one grid node against a direct double sum.
+        let n = 20;
+        let c = Coefficients::from_bundle(n);
+        let (n_lat, n_lon) = (7usize, 13usize);
+        let g = free_air_anomaly_grid(n_lat, n_lon, n, GM, &c);
+        let (i, j) = (2usize, 5usize);
+        let phi = (90.0 - i as f64 * 30.0f64).to_radians();
+        let lam = (-180.0 + j as f64 * 30.0f64).to_radians();
+        let mut p = vec![0.0f64; (n + 1) * (n + 2) / 2];
+        alf_table(n, phi.sin(), phi.cos(), &mut p);
+        let mut sum = 0.0;
+        for nn in 2..=n {
+            for m in 0..=nn {
+                let (cc, ss) = c.get(nn, m);
+                let ml = m as f64 * lam;
+                sum += (nn as f64 - 1.0) * p[nn*(nn+1)/2 + m] * (cc * ml.cos() + ss * ml.sin());
+            }
+        }
+        let expect = GM / (R_REF * R_REF) * 1.0e8 * sum;
+        let got = g[i * n_lon + j];
+        assert!((got - expect).abs() < 1e-9 * expect.abs().max(1.0), "{got} vs {expect}");
+    }
+
+    #[test]
+    fn anomaly_grid_full_degree_has_mascon_scale_range() {
+        // GRAIL free-air anomalies at degree 100 reach a few hundred mGal.
+        let c = Coefficients::from_bundle(100);
+        let g = free_air_anomaly_grid(91, 181, 100, GM, &c);
+        let max = g.iter().cloned().fold(f64::MIN, f64::max);
+        let min = g.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(max > 100.0 && max < 2000.0, "max {max} mGal");
+        assert!(min < -100.0 && min > -2000.0, "min {min} mGal");
     }
 }
