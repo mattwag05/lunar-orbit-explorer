@@ -1,175 +1,102 @@
-# Lunar Orbit Explorer — Phase 1
+# Lunar Orbit Explorer
 
-A proof-of-concept that retires two scary integration risks:
+A guided explainer for one idea: the Moon's lumpy gravity destroys low lunar
+orbits. Eight short acts walk from "where you are" to "watch a week of drift",
+with a live orbit propagator running behind the text the whole time. The final
+act hands over control: move the orbit, break it, or ride along.
 
-1. **Rust → WASM propagation** running in the browser (Dormand-Prince 45 two-body integrator)
-2. **CesiumJS** rendering a 3D lunar globe with a live orbit trail
+Every number on screen comes from the propagator or from a sourced constant.
+Anything distorted (sped-up time, exaggerated relief, a reduced gravity degree
+for speed) says so on screen.
 
-The default demo orbit approximates the Apollo 11 LM ascent stage (Eagle):
-near-retrograde, ~100–115 km altitude, near-circular.
+The spec is [docs/prd-guided-explainer.md](docs/prd-guided-explainer.md). The
+physics checks behind Act 5 are in [docs/validation.md](docs/validation.md).
 
----
+## What is inside
 
-## Architecture
+| Part | What it does |
+|---|---|
+| `propagator/` | Rust crate compiled to WebAssembly. DOP853 adaptive integrator, GRGM1200A spherical-harmonic gravity to degree 100 (5,151 coefficient pairs from NASA GSFC), Earth and Sun third-body terms, and a surface free-air anomaly grid. |
+| `web/sim-worker.js` | Runs the live propagator in a Web Worker at the requested time warp and reports the rate it actually achieved. |
+| `web/drift-worker.js` | Act 5's precompute: two propagators (point mass and degree 20) stepped for 7 days in 300 s chunks. |
+| `web/acts.js`, `web/copy.js` | The act sequence and its copy. `copy.js` is the only place mission facts live, each with a source. |
+| `web/physics-constants.js` | Constants mirrored from the Rust sources; a test fails if they drift. |
+| `web/scene.js` | CesiumJS scene: Moon mesh tinted and (in Act 4) raised by the gravity anomaly, orbit trails, an eased camera rig. |
 
-```
-lunar-orbit-explorer/
-├── propagator/          # Rust crate → compiled to WebAssembly
-│   ├── Cargo.toml
-│   └── src/lib.rs       # DP45 two-body integrator + wasm-bindgen API
-├── web/
-│   ├── index.html       # Entry point
-│   ├── main.js          # WASM init + CesiumJS wiring + animation loop
-│   └── style.css        # HUD + minimal dark theme
-├── package.json
-├── vite.config.js
-└── README.md
-```
+The layout works on desktop and on phones, where the text becomes a bottom
+sheet and the scene takes drag and pinch.
 
----
+## Build and run
 
-## Prerequisites
-
-### 1. Rust + wasm-pack
-
-```bash
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-
-# Add WebAssembly target
-rustup target add wasm32-unknown-unknown
-
-# Install wasm-pack
-cargo install wasm-pack
-```
-
-### 2. Node.js 18+
+Prerequisites: Rust with the `wasm32-unknown-unknown` target, `wasm-pack`, and
+Node 20 or newer.
 
 ```bash
-# macOS
-brew install node
+npm install
+npm run build:wasm
+npm run dev
 ```
 
----
+Production build (WASM plus front end, output in `dist/`):
 
-## Build & Run
+```bash
+npm run build:all
+```
 
-### Step 1 — Compile the WASM propagator
+## Tests
+
+```bash
+npm test
+```
+
+```bash
+cd propagator && cargo test --release
+```
+
+`npm test` covers formatting, the drift geometry, the warp ladder, the
+constants cross-check against the Rust sources, and the grep-style acceptance
+checks from the PRD. The Rust suite covers the integrator, frames, third-body
+terms, coefficient loading, ALF orthonormality, gravity gradients against
+independent potentials, and the anomaly grid.
+
+## Validation harness
 
 ```bash
 cd propagator
-wasm-pack build --target web
-# Output: propagator/pkg/  (JS bindings + .wasm)
+cargo run --release --example validate -- eagle 20
+cargo run --release --example validate -- pfs2 100 180 180
 ```
 
-### Step 2 — Install JS dependencies
-
-```bash
-cd ..        # back to project root
-npm install
-```
-
-### Step 3 — Start the dev server
-
-```bash
-npm run dev
-# Opens http://localhost:3000
-```
-
-### One-shot (build WASM + start dev server)
-
-```bash
-npm run dev:full
-```
-
-### Production build
-
-```bash
-npm run build
-# Output: dist/
-```
-
----
-
-## Cesium Ion Token
-
-Basic Moon rendering works without a token. For full ion asset access:
-
-```bash
-# .env.local (gitignored)
-VITE_CESIUM_TOKEN=your_token_here
-```
-
----
-
-## HUD Controls
-
-| Control       | Description                                    |
-|---------------|------------------------------------------------|
-| ▶ Play        | Resume propagation                             |
-| ⏸ Pause       | Freeze propagation (camera still controllable) |
-| ↺ Reset       | Return to epoch state                          |
-| Time Warp     | 1× / 10× / 100× / 500× / 1000× / 5000×        |
-| Altitude      | Current altitude above mean lunar surface (km) |
-| Speed         | Current orbital speed (km/s)                   |
-| Elapsed       | Simulated mission elapsed time                 |
-
----
+See [docs/validation.md](docs/validation.md) for what these reproduce.
 
 ## Propagator API (WASM)
 
 ```typescript
 class Propagator {
   constructor();
-  init(gm: f64): void;                                          // set GM (km³/s²)
-  set_state(x, y, z, vx, vy, vz: f64): void;                   // Cartesian (km, km/s)
-  init_from_keplerian(sma, ecc, inc, raan, argp, ta: f64): void; // angles in radians
-  step(dt: f64): boolean;                                       // propagate dt seconds
-  get_state(): Float64Array;                                    // [x,y,z,vx,vy,vz]
-  get_time(): f64;                                              // elapsed seconds
-  get_altitude(): f64;                                          // km above 1737.4 km
-  get_speed(): f64;                                             // km/s
+  init(gm: number): void;                                   // km³/s²
+  set_state(x, y, z, vx, vy, vz: number): void;             // km, km/s; resets clock
+  init_from_keplerian(sma, ecc, inc, raan, argp, ta: number): void; // radians; resets clock
+  set_gravity_degree(degree: number): void;                 // 0 or 1 = point mass, up to 100
+  load_coefficients(data: Uint8Array): void;
+  enable_third_body(earth: boolean, sun: boolean): void;
+  step(dt: number): boolean;                                // seconds
+  get_state(): Float64Array;                                // [x,y,z,vx,vy,vz]
+  get_time(): number;
+  get_altitude(): number;                                   // km above 1737.4 km
+  get_speed(): number;
+  get_orbital_elements(): Float64Array;                     // [sma, ecc, inc, raan, argp, ta]
+  get_loaded_degree(): number;
+  get_coefficient_count(): number;
+  gravity_anomaly_grid(n_lat: number, n_lon: number, degree: number): Float64Array; // mGal
 }
 ```
 
----
+## Data
 
-## Orbit Parameters (Default)
+- Gravity: GRGM1200A, NASA Goddard Space Flight Center, truncated to 100x100.
+- Mission facts: NASA NSSDCA catalog entries for the Apollo 15 and Apollo 16
+  subsatellites and the NASA Science Apollo 16 Subsatellite page. Sources are
+  cited inline in `web/copy.js`.
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| SMA | 1838 km | ~100 km altitude |
-| Eccentricity | 0.04 | Near-circular |
-| Inclination | 179° | Near-retrograde |
-| RAAN | 0° | |
-| Arg. Perigee | 0° | |
-| True Anomaly | 0° (epoch) | |
-| Period | ~118.7 min | |
-
----
-
-## Running Rust Tests
-
-```bash
-cd propagator
-cargo test
-```
-
-Tests validate:
-- One-orbit position closure (circular orbit returns to start)
-- Specific orbital energy conservation (< 1e-8 relative error)
-- Angular momentum conservation
-- Eagle-like orbit period (~118 min)
-- Keplerian element → Cartesian conversion round-trip
-- Zero-dt propagation identity
-
----
-
-## Phase 2 Roadmap
-
-- Spherical harmonics (LP165P gravity model) for high-fidelity lunar perturbations
-- Dormand-Prince 78 for higher accuracy
-- STL terrain mesh for real surface elevation
-- Multiple spacecraft / mission phases
-- TLE import
+This is a simulation, not a live tracking feed.
