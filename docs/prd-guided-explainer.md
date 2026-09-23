@@ -122,7 +122,7 @@ Design rule that applies to all acts: the 3D view is always live and always behi
 
 ### 5.0 Where the numbers in the copy come from
 
-This resolves the contradiction between the headline copy and rule 7.4. Three classes, three rules.
+This resolves the contradiction between the headline copy and section 7 rule 4. Three classes, three rules.
 
 **Class A: simulation values.** Anything describing the current run. Period, altitude, speed, drift, separation. Read from propagator getters. Never literals in the presentation layer.
 
@@ -246,9 +246,9 @@ Two findings worth acting on:
 **Physics validation gate.** Before this act ships, validate the drift against an independent published result. Two rules for the check:
 
 1. **Compare separation and altitude decay, not RAAN.** RAAN is unusable for a near-equatorial orbit, for the reason given above.
-2. **Use the anchor mission's own starting orbit.** PFS-2 decayed after roughly 34 days (425 revolutions), but it flew a different orbit than Eagle. PFS-2's inclination was 11 degrees; Eagle's is 179.07 degrees, or under 1 degree from the equatorial plane. Both are low-inclination, so they are not interchangeable, and validating Eagle's altitude decay against PFS-2's lifetime is not a like-for-like comparison. Either propagate PFS-2's actual orbital elements (sourced and cited, see 5.8) and compare the resulting lifetime against ~34 days, or use a published result computed for a near-equatorial low lunar orbit.
+2. **Use the anchor mission's own starting orbit.** PFS-2 decayed after roughly 34 days (425 revolutions), but it flew a different orbit than Eagle. PFS-2's inclination was about 10 degrees (some sources say 11); Eagle's is 179.07 degrees, or under 1 degree from the equatorial plane. Both are low-inclination, so they are not interchangeable, and validating Eagle's altitude decay against PFS-2's lifetime is not a like-for-like comparison. Either propagate PFS-2's actual orbital elements (sourced and cited, see 5.8) and compare the resulting lifetime against ~34 days, or use a published result computed for a near-equatorial low lunar orbit.
 
-Worth knowing for the gate: stable low lunar orbits cluster at the frozen inclinations of 27, 50, 76 and 86 degrees, where the mascon perturbations balance. Neither orbit here sits at one. PFS-2's 11 degrees is well clear of all four, and Eagle's near-equatorial plane is likewise not frozen, so both are expected to decay. That is the physics the act is teaching, and it is also why the anchor has to match the orbit being validated.
+Worth knowing for the gate: stable low lunar orbits cluster at the frozen inclinations of 27, 50, 76 and 86 degrees, where the mascon perturbations balance. Neither orbit here sits at one. PFS-2's 10 degrees is well clear of all four, and Eagle's near-equatorial plane is likewise not frozen, so both are expected to decay. That is the physics the act is teaching, and it is also why the anchor has to match the orbit being validated.
 
 If the simulation disagrees with the published result, the simulation is wrong, not the lesson.
 
