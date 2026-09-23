@@ -4,6 +4,7 @@ propagator/target/
 propagator/pkg/
 .env.local
 .claude/worktrees/
+.DS_Store
 
 # Agent docs and local tooling (kept out of the public repo)
 CLAUDE.md
