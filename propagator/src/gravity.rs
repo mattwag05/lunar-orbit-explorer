@@ -19,6 +19,41 @@
 
 use crate::coefficients::{Coefficients, R_REF};
 
+/// Fill `p` with fully-normalised ALFs P̄_nm(sin φ) for n ≤ `n_max`,
+/// stored at p[n*(n+1)/2 + m]. `p` must hold (n_max+1)(n_max+2)/2 values.
+pub(crate) fn alf_table(n_max: usize, sin_phi: f64, cos_phi: f64, p: &mut [f64]) {
+    let idx = |n: usize, m: usize| n*(n+1)/2 + m;
+
+    // P̄_00 = 1
+    p[idx(0, 0)] = 1.0;
+
+    // Build P̄_nm using the standard recursion (M&G eq. 3.29)
+    for n in 1..=n_max {
+        let nf = n as f64;
+
+        // Sectorial P̄_nn from P̄_{n-1,n-1}. The n = 1 step crosses from
+        // m = 0 to m > 0, which picks up the (2 − δ_m0) normalisation factor:
+        // P̄_11 = √3·cos φ, not √(3/2)·cos φ.
+        let a_nn = if n == 1 { 3f64.sqrt() } else { ((2.0*nf + 1.0) / (2.0*nf)).sqrt() };
+        p[idx(n, n)] = a_nn * cos_phi * p[idx(n-1, n-1)];
+
+        // Sub-diagonal P̄_{n,n-1} from P̄_{n-1,n-1}
+        let a_nn1 = (2.0*nf + 1.0).sqrt();
+        p[idx(n, n-1)] = a_nn1 * sin_phi * p[idx(n-1, n-1)];
+
+        // Off-diagonal recurrence P̄_nm from P̄_{n-1,m} and P̄_{n-2,m}
+        for m in 0..n.saturating_sub(1) {
+            let mf = m as f64;
+            let a = ((4.0*nf*nf - 1.0) / (nf*nf - mf*mf)).sqrt();
+            let b = (((2.0*nf + 1.0)*(nf - 1.0 + mf)*(nf - 1.0 - mf))
+                     / ((2.0*nf - 3.0)*(nf*nf - mf*mf))).sqrt();
+            let p_n1 = if n >= 1 { p[idx(n-1, m)] } else { 0.0 };
+            let p_n2 = if n >= 2 { p[idx(n-2, m)] } else { 0.0 };
+            p[idx(n, m)] = a * sin_phi * p_n1 - b * p_n2;
+        }
+    }
+}
+
 /// Compute gravitational acceleration [km/s²] for body-fixed position `r` [km].
 ///
 /// `gm`:    gravitational parameter [km³/s²]
@@ -72,32 +107,7 @@ pub fn gravity_sh(r: &[f64; 3], gm: f64, n_max: usize, coeff: &Coefficients) -> 
 
     let idx = |n: usize, m: usize| n*(n+1)/2 + m;
 
-    // P̄_00 = 1
-    p[idx(0, 0)] = 1.0;
-
-    // Build P̄_nm using the standard recursion (M&G eq. 3.29)
-    for n in 1..=n_max {
-        let nf = n as f64;
-
-        // Sectorial P̄_nn from P̄_{n-1,n-1}
-        let a_nn = ((2.0*nf + 1.0) / (2.0*nf)).sqrt();
-        p[idx(n, n)] = a_nn * cos_phi * p[idx(n-1, n-1)];
-
-        // Sub-diagonal P̄_{n,n-1} from P̄_{n-1,n-1}
-        let a_nn1 = (2.0*nf + 1.0).sqrt();
-        p[idx(n, n-1)] = a_nn1 * sin_phi * p[idx(n-1, n-1)];
-
-        // Off-diagonal recurrence P̄_nm from P̄_{n-1,m} and P̄_{n-2,m}
-        for m in 0..n.saturating_sub(1) {
-            let mf = m as f64;
-            let a = ((4.0*nf*nf - 1.0) / (nf*nf - mf*mf)).sqrt();
-            let b = (((2.0*nf + 1.0)*(nf - 1.0 + mf)*(nf - 1.0 - mf))
-                     / ((2.0*nf - 3.0)*(nf*nf - mf*mf))).sqrt();
-            let p_n1 = if n >= 1 { p[idx(n-1, m)] } else { 0.0 };
-            let p_n2 = if n >= 2 { p[idx(n-2, m)] } else { 0.0 };
-            p[idx(n, m)] = a * sin_phi * p_n1 - b * p_n2;
-        }
-    }
+    alf_table(n_max, sin_phi, cos_phi, &mut p);
 
     // dP̄_nm/dφ via the derivative recursion (avoids 1/cos_phi singularity).
     //
@@ -247,6 +257,114 @@ mod tests {
         // so polar a is stronger. Check it's different from point-mass.
         let rel = (a[2] - a_pm) / a_pm.abs();
         assert!(rel.abs() > 1e-5, "J2 polar correction too small: {:.3e}", rel);
+    }
+
+    /// Degree-2 perturbing potential (point mass excluded) from closed-form
+    /// fully normalised ALFs,
+    /// independent of the recursion in `alf_table`:
+    ///   P̄20 = √5(3s²−1)/2, P̄21 = √15·s·c, P̄22 = (√15/2)·c²
+    fn degree2_potential(r: &[f64; 3], c: &Coefficients) -> f64 {
+        let rho = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt();
+        let s   = r[2] / rho;
+        let cp  = (r[0]*r[0] + r[1]*r[1]).sqrt() / rho;
+        let lam = r[1].atan2(r[0]);
+        let p20 = 5f64.sqrt() * (3.0*s*s - 1.0) / 2.0;
+        let p21 = 15f64.sqrt() * s * cp;
+        let p22 = 15f64.sqrt() / 2.0 * cp * cp;
+        let (c20, _)   = c.get(2, 0);
+        let (c21, s21) = c.get(2, 1);
+        let (c22, s22) = c.get(2, 2);
+        let ratio2 = (R_REF / rho).powi(2);
+        let sum = p20 * c20
+            + p21 * (c21 * lam.cos() + s21 * lam.sin())
+            + p22 * (c22 * (2.0*lam).cos() + s22 * (2.0*lam).sin());
+        GM / rho * ratio2 * sum
+    }
+
+    #[test]
+    fn degree2_matches_closed_form_gradient() {
+        // Central-difference gradient of the closed-form perturbing potential
+        // must match gravity_sh minus point mass, including the tesseral
+        // C21/S21/C22/S22 terms. Differencing only the perturbation keeps the
+        // finite-difference rounding far below the tolerance.
+        let c = Coefficients::from_bundle(2);
+        let r = [1400.0f64, 900.0, 650.0];
+        let a = gravity_sh(&r, GM, 2, &c);
+        let h = 1e-2;
+        let rho = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt();
+        for k in 0..3 {
+            let mut rp = r; rp[k] += h;
+            let mut rm = r; rm[k] -= h;
+            let pert_fd = (degree2_potential(&rp, &c) - degree2_potential(&rm, &c)) / (2.0*h);
+            let pert_sh = a[k] - (-GM * r[k] / rho.powi(3));
+            assert!((pert_sh - pert_fd).abs() < 1e-6 * pert_fd.abs().max(1e-12),
+                "axis {k}: SH perturbation {pert_sh:.9e}, closed-form {pert_fd:.9e}");
+        }
+    }
+
+    /// Perturbing potential (degrees 1..=n_max) summed from `alf_table`.
+    fn table_potential(r: &[f64; 3], n_max: usize, c: &Coefficients) -> f64 {
+        let rho = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt();
+        let s   = r[2] / rho;
+        let cp  = (r[0]*r[0] + r[1]*r[1]).sqrt() / rho;
+        let lam = r[1].atan2(r[0]);
+        let mut p = vec![0.0f64; (n_max + 1) * (n_max + 2) / 2];
+        alf_table(n_max, s, cp, &mut p);
+        let mut sum = 0.0;
+        for n in 1..=n_max {
+            let ratio = (R_REF / rho).powi(n as i32);
+            for m in 0..=n {
+                let (cnm, snm) = c.get(n, m);
+                let ml = m as f64 * lam;
+                sum += ratio * p[n*(n+1)/2 + m] * (cnm * ml.cos() + snm * ml.sin());
+            }
+        }
+        GM / rho * sum
+    }
+
+    #[test]
+    fn degree30_gradient_matches_potential() {
+        // Checks the dP̄/dφ recursion and the λ derivative at higher order,
+        // using the potential built from the orthonormality-tested ALF table.
+        let n = 30;
+        let c = Coefficients::from_bundle(n);
+        let r = [-1210.0f64, 1080.0, 820.0];
+        let a = gravity_sh(&r, GM, n, &c);
+        let rho = (r[0]*r[0] + r[1]*r[1] + r[2]*r[2]).sqrt();
+        let h = 1e-2;
+        for k in 0..3 {
+            let mut rp = r; rp[k] += h;
+            let mut rm = r; rm[k] -= h;
+            let pert_fd = (table_potential(&rp, n, &c) - table_potential(&rm, n, &c)) / (2.0*h);
+            let pert_sh = a[k] - (-GM * r[k] / rho.powi(3));
+            assert!((pert_sh - pert_fd).abs() < 1e-5 * pert_fd.abs().max(1e-12),
+                "axis {k}: SH perturbation {pert_sh:.9e}, potential gradient {pert_fd:.9e}");
+        }
+    }
+
+    #[test]
+    fn alf_table_is_orthonormal() {
+        // ∫ P̄nm(sin φ)² cos φ dφ over [−π/2, π/2] = 2·(2 − δm0) for the
+        // geodesy 4π normalisation used by GRGM1200A.
+        let n_max = 30;
+        let steps = 20_000;
+        let dphi  = std::f64::consts::PI / steps as f64;
+        let n_pairs = (n_max + 1) * (n_max + 2) / 2;
+        let mut sums = vec![0.0f64; n_pairs];
+        let mut p = vec![0.0f64; n_pairs];
+        for i in 0..steps {
+            let phi = -std::f64::consts::FRAC_PI_2 + (i as f64 + 0.5) * dphi;
+            alf_table(n_max, phi.sin(), phi.cos(), &mut p);
+            for k in 0..n_pairs { sums[k] += p[k] * p[k] * phi.cos() * dphi; }
+        }
+        for n in 0..=n_max {
+            for m in 0..=n {
+                let expect = if m == 0 { 2.0 } else { 4.0 };
+                let got = sums[n*(n+1)/2 + m];
+                assert!((got - expect).abs() < 1e-6,
+                    "∫P̄({n},{m})² = {got:.8}, expected {expect}");
+            }
+        }
     }
 
     #[test]
