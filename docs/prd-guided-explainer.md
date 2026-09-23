@@ -1,7 +1,7 @@
 # PRD: Lunar Orbit Explorer as a guided explainer
 
 **Status:** ready for implementation
-**Revision:** 2 (fixes warp ladder, Act 5 timing, missing getters, headline sourcing; answers section 12)
+**Revision:** 3 (implementation notes; see section 0.1)
 **Owner:** Iris (product and design)
 **Implementer:** Claude (coding agent)
 **Target repo:** `mattwag05/lunar-orbit-explorer`
@@ -19,6 +19,18 @@ Four contradictions from revision 1 are fixed, the open questions are answered, 
 | Act 4 needs unlisted Rust additions | Two named getters plus an anomaly grid, each with a test (5.5, 8) |
 | Rule 4 bans literals but headlines contain them | Simulation values from getters, constants templated from physics constants, mission facts in one sourced copy block (5.0, section 7 rule 4) |
 | Act 5 reported ΔRAAN as evidence of drift | Separation split by direction; RAAN dropped as an artifact of a near-equatorial orbit (5.6) |
+
+### 0.1 What changed in revision 3 (implementation)
+
+| Was | Is now |
+|---|---|
+| Mobile out of scope (section 10) | In scope at the owner's request: on phones the text column becomes a bottom sheet, the Moon is framed above it, and the scene takes drag and pinch |
+| Act 5 evidence table measured on code with a Legendre normalisation bug (P̄₁₁ off by √2, all m ≥ 1 terms scaled by 1/√2) | Bug fixed and tested; re-measured figures in docs/validation.md (674 km apart and 45 km lower at day 7 at degree 100) |
+| Act 5 working degree to be chosen | Degree 20: within 1 percent of degree 100 at every checkpoint, 0.55 s in the browser |
+| PFS-2 "expected to last a year and a half" | NASA Science gives "the planned one year"; the copy says a year. The year and a half belongs to PFS-1 |
+| PFS-2 inclination 10° or 11°, convention unknown | NSSDC source set chosen: 10°, "clockwise as viewed from north", so 170° in the propagator frame |
+| Validation gate open | Passed; see docs/validation.md |
+| Rust additions limited to the three getters | Also: the P̄₁₁ fix (a correction, not new physics) and a native-only `state_vec` accessor for the validation harness |
 
 ---
 
@@ -254,7 +266,7 @@ If the simulation disagrees with the published result, the simulation is wrong, 
 
 The 645 km separation at 7 days is a plausible size rather than an obviously wrong one. Both runs start from the same instantaneous state, so the lumpy field changes the effective orbital period, and a timing gap of roughly 4.6 seconds per orbit accumulates to that order over about 12 orbits. The gate exists because plausible is not verified.
 
-**Conclusion line**, Class C plus a Class A number: `Apollo 16 released PFS-2 into a low lunar orbit in 1972. It was expected to last a year and a half. It fell after {days} days.` Renders with the historical figure from the sourced copy block. One source must be chosen: NASA Science says 34 days, other sources say tracked for 35. Pick one and cite it in the copy block.
+**Conclusion line**, Class C plus a Class A number: `Apollo 16 released PFS-2 into a low lunar orbit in 1972. It was expected to last a year. It fell after {days} days.` Renders with the historical figure from the sourced copy block. Source set chosen: NASA NSSDCA and NASA Science, 34 days and a planned one year (revision 3).
 
 ### 5.7 Act 6, the other pullers (2:05)
 
@@ -378,7 +390,7 @@ Transition between acts: the text column cross-fades over 400 ms. The scene neve
 - Performance targets are split, because Act 5 has two different phases:
   - Act 5 **replay**: 60 fps, measured in Chrome DevTools with the trail at `MAX_TRAIL_POINTS` of 2000.
   - Act 5 **precompute**: 10 seconds on target hardware, with a progress indicator.
-- Mobile is out of scope for this pass, but the text column must not overflow below 1280 px wide. Below that, reduce the column to 300 px and the headline to 26 px.
+- The text column must not overflow below 1280 px wide. Below that, reduce the column to 300 px and the headline to 26 px. Below 768 px (phones), the column becomes a bottom sheet of at most 52 percent of the height, tap targets are at least 44 px, and the camera frames the Moon in the space above the sheet (revision 3).
 
 ---
 
@@ -436,7 +448,6 @@ Claude, treat this list as the definition of done. Each item is checkable.
 
 ## 10. Out of scope
 
-- Mobile layout and touch gestures.
 - Any change to the physics, the integrator, or the gravity data.
 - Multi-spacecraft or mission-phase features from the existing Phase 2 roadmap.
 - TLE import.
@@ -453,7 +464,7 @@ Claude, treat this list as the definition of done. Each item is checkable.
 
 ### 12.1 Act 5's conclusion names a real mission
 
-**Apollo 16's PFS-2.** Released April 1972 into a low lunar orbit, expected to last about a year and a half, destroyed by mascon-driven orbital decay after roughly 34 days. Apollo 15's PFS-1 lasted far longer, and the contrast is not altitude: PFS-1 was at 102 x 139 km and PFS-2 at 90 x 130 km, close enough to be the same class of orbit. What differed was inclination, PFS-1 at 28.5 degrees and PFS-2 at 10 degrees (some sources say 11). PFS-1 happened to sit near the 27-degree frozen inclination where mascon perturbations balance; PFS-2 did not. That contrast is the lesson, stated as fact rather than as a claim.
+**Apollo 16's PFS-2.** Released April 1972 into a low lunar orbit, planned to last a year, destroyed by mascon-driven orbital decay after roughly 34 days. Apollo 15's PFS-1 lasted far longer, and the contrast is not altitude: PFS-1 was at 102 x 139 km and PFS-2 at 90 x 130 km, close enough to be the same class of orbit. What differed was inclination, PFS-1 at 28.5 degrees and PFS-2 at 10 degrees (some sources say 11). PFS-1 happened to sit near the 27-degree frozen inclination where mascon perturbations balance; PFS-2 did not. That contrast is the lesson, stated as fact rather than as a claim.
 
 Source conflicts to resolve when the copy block is written: inclination is given as 10 degrees (Gunter's Space Page, with periselene 90 km and aposelene 130 km) or 11 degrees (Wikipedia); tracked lifetime is given as 34 days or 35 days. Pick one source set, cite it, and use it consistently in both the copy and the validation gate.
 
