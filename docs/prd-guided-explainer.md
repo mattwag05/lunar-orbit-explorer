@@ -10,14 +10,15 @@
 
 ## 0. What changed in revision 2
 
-Four contradictions in revision 1 are fixed, and the open questions are answered. Section 9 is the definition of done.
+Four contradictions from revision 1 are fixed, the open questions are answered, and one misleading measurement is corrected. Section 9 is the definition of done.
 
 | Was | Is now |
 |---|---|
-| Cockpit warp "maps onto existing `WARP_LEVELS`" (which lacks 240x/2400x/3600x) | A labeled ladder that replaces `WARP_LEVELS` entirely; (5.9) |
-| Act 5 runs 30 days live in a 25-second act | 7-day horizon, (5.6) |
-| Act 4 needs unlisted Rust additions | Two named getters plus an (5.5, 8) |
-| Rule 4 bans literals but headlines contain them | Simulation values from getters, constants templated from physics constants, mission facts in one sourced copy block (5.0, 7.4) |
+| Cockpit warp "maps onto existing `WARP_LEVELS`" (which lacks 240x/2400x/3600x) | A labeled ladder that replaces `WARP_LEVELS` entirely, every step stating its multiplier (5.9) |
+| Act 5 runs 30 days live in a 25-second act | 7-day horizon, precomputed in a Web Worker and replayed (5.6) |
+| Act 4 needs unlisted Rust additions | Two named getters plus an anomaly grid, each with a test (5.5, 8) |
+| Rule 4 bans literals but headlines contain them | Simulation values from getters, constants templated from physics constants, mission facts in one sourced copy block (5.0, section 7 rule 4) |
+| Act 5 reported ΔRAAN as evidence of drift | Separation split by direction; RAAN dropped as an artifact of a near-equatorial orbit (5.6) |
 
 ---
 
@@ -200,7 +201,19 @@ This is the counterfactual toggle and it is the most important act in the app. I
 - Headline: "Now let the real gravity act, and watch what a week does to the same orbit."
 - Control: `POINT MASS / REAL GRAVITY`, mirroring the reference's correction toggle.
 
-**Horizon is 7 days, not 30.** Measured on the default orbit, one day already separates the two orbits by 89 km and seven days swings RAAN 130 degrees. Thirty days costs roughly four times the runtime for no additional insight. Checkpoints at 1, 3 and 7 days.
+**Horizon is 7 days, not 30.** Measured on the default orbit, one day already separates the two orbits by 89 km, and by seven days the separation is 645 km with 32 km of altitude change. Thirty days costs roughly four times the runtime for no additional insight. Checkpoints at 1, 3 and 7 days.
+
+**Readout: separation, split by direction. Do not show RAAN for this orbit.** RAAN is not a usable number for a near-equatorial orbit, and the default orbit is 0.93 degrees from equatorial. At that tilt the ascending node is barely defined, so a small real plane change produces an enormous apparent RAAN swing. The measured ΔRAAN of 130 degrees in seven days back-solves to only about 2.1 degrees of actual plane change, amplified roughly 62x by 1/sin(i). J2 nodal regression on this orbit is about 1.2 degrees per day, so roughly 8 degrees over the horizon; the other 122 degrees is the coordinate singularity, not physics.
+
+The readout is therefore the separation between the two spacecraft, decomposed into three components, which also fills the reference's `mostly in <direction>` slot directly:
+
+| Component | Definition |
+|---|---|
+| `height` | difference in altitude above mean lunar radius |
+| `along-track` | separation projected on the velocity direction of the reference run |
+| `cross-track` | remainder, perpendicular to both |
+
+State the dominant component, for example `645 km off, mostly along-track`. If an orbital-element readout is wanted instead, use the angle to closest approach measured from a fixed direction (`Ω + ω`), which stays well-defined when the orbit is nearly flat. Do not put RAAN on screen for a near-equatorial orbit, and do not use it as a validation quantity.
 
 **Precompute, do not propagate live.** A 7-day two-propagator run measured 34.2 seconds of native ARM CPU at degree 100 with 300-second chunks. That cannot happen in a frame loop.
 
@@ -214,19 +227,32 @@ Requirements:
 
 **Measured evidence, so Claude does not have to rediscover it:**
 
-| Configuration | Wall time | Separation | ΔRAAN | Δaltitude |
-|---|---|---|---|---|
-| 1 day, both props, 60s chunks | 14.5s | 89.1 km | +10.6° | +4.3 km |
-| 7 days, both props, 60s chunks | 76.7s | 645.1 km | +130.2° | −31.8 km |
-| 7 days, both props, 300s chunks | 34.2s | 645.1 km | +130.2° | −31.8 km |
-| 30 days, single prop, 60s chunks | 323.6s | n/a | n/a | n/a |
+| Configuration | Wall time | Separation | Δaltitude |
+|---|---|---|---|
+| 1 day, both props, 60s chunks | 14.5s | 89.1 km | +4.3 km |
+| 7 days, both props, 60s chunks | 76.7s | 645.1 km | −31.8 km |
+| 7 days, both props, 300s chunks | 34.2s | 645.1 km | −31.8 km |
+| 30 days, single prop, 60s chunks | 323.6s | n/a | n/a |
+
+ΔRAAN was measured alongside these runs and is deliberately not reported here. See the readout note above: it is dominated by the coordinate singularity, not by the drift.
 
 Two findings worth acting on:
 
 - **Chunk size is free.** 300-second chunks give results identical to 60-second chunks at half the cost, because `H_MAX` in `integrator.rs` is already 300 seconds. Requesting 60-second chunks makes the adaptive stepper restart five times per 300 seconds for no accuracy gain. Use 300.
-- **Where the time goes is unconfirmed.** `gravity_sh` allocates four `Vec<f64>` per call (`cos_ml`, `sin_ml`, `p`, `dp`), and a 7-day pair run is on the order of a million RHS evaluations. That allocation pattern is a plausible dominant cost, but profile before optimizing. It may also be that the reduced-degree path alone is enough to hit the 10-second budget.
+- **Where the time goes is unconfirmed.** `gravity_sh` allocates four `Vec<f64>` per call (`cos_ml`, `sin_ml`, `p`, `dp`), and a 7-day pair run is on the order of a million RHS evaluations. That allocation pattern is a plausible dominant cost, but profile before optimizing.
 
-**Physics validation gate.** The measured drift is large, larger than a simple J2 nodal regression estimate for that orbit would suggest, and the degree-100 evaluation path is only test-covered at low degree. Before this act ships, validate the drift against an independent published result. A low lunar orbit's observed lifetime is the natural anchor, and Act 5's conclusion names one (below). If the simulation disagrees with the published result, the simulation is wrong, not the lesson.
+**Plan on a reduced degree from the start.** The 34.2-second figure is a native ARM release build. The browser WASM build will be slower, so the 10-second budget is unlikely to be met at full degree 100. Choose the working degree up front rather than discovering the shortfall after wiring the act, and name it in the chip.
+
+**Physics validation gate.** Before this act ships, validate the drift against an independent published result. Two rules for the check:
+
+1. **Compare separation and altitude decay, not RAAN.** RAAN is unusable for a near-equatorial orbit, for the reason given above.
+2. **Use the anchor mission's own starting orbit.** PFS-2 decayed after roughly 34 days (425 revolutions), but it flew a different orbit than Eagle. PFS-2's inclination was 11 degrees; Eagle's is 179.07 degrees, or under 1 degree from the equatorial plane. Both are low-inclination, so they are not interchangeable, and validating Eagle's altitude decay against PFS-2's lifetime is not a like-for-like comparison. Either propagate PFS-2's actual orbital elements (sourced and cited, see 5.8) and compare the resulting lifetime against ~34 days, or use a published result computed for a near-equatorial low lunar orbit.
+
+Worth knowing for the gate: stable low lunar orbits cluster at the frozen inclinations of 27, 50, 76 and 86 degrees, where the mascon perturbations balance. Neither orbit here sits at one. PFS-2's 11 degrees is well clear of all four, and Eagle's near-equatorial plane is likewise not frozen, so both are expected to decay. That is the physics the act is teaching, and it is also why the anchor has to match the orbit being validated.
+
+If the simulation disagrees with the published result, the simulation is wrong, not the lesson.
+
+The 645 km separation at 7 days is a plausible size rather than an obviously wrong one. Both runs start from the same instantaneous state, so the lumpy field changes the effective orbital period, and a timing gap of roughly 4.6 seconds per orbit accumulates to that order over about 12 orbits. The gate exists because plausible is not verified.
 
 **Conclusion line**, Class C plus a Class A number: `Apollo 16 released PFS-2 into a low lunar orbit in 1972. It was expected to last a year and a half. It fell after {days} days.` Renders with the historical figure from the sourced copy block. One source must be chosen: NASA Science says 34 days, other sources say tracked for 35. Pick one and cite it in the copy block.
 
@@ -243,7 +269,7 @@ Two findings worth acting on:
 - Headline: "Move the orbit. Break it. Ride along."
 - Three named actions, matching the reference's "move your pin / break it / ride a satellite":
   1. `Move the orbit` opens the Keplerian element controls as sliders (SMA, ECC, INC).
-  2. `Break it` drops the orbit into a PFS-2-like low orbit, the one history says is unstable.
+  2. `Break it` loads PFS-2's own published orbital elements (inclination 11 degrees) and starts the run at full degree. This is also the configuration the validation gate compares against PFS-2's recorded ~34-day lifetime, so the elements must be the real ones, sourced and cited, not a generic low orbit. Show the inclination against Eagle's explicitly: the point of the act is that a near-frozen orbit and a near-equatorial one both fail, but for different reasons and over different timescales.
   3. `Ride along` enters the cockpit, described next.
 - Footer: `Esc to return.`
 
@@ -371,7 +397,8 @@ Claude, treat this list as the definition of done. Each item is checkable.
 - [ ] No propagator call exists in the frame loop. Act 5 is table replay.
 - [ ] Act 5's drift figures come from the worker's table, which came from two propagator instances at degree 0 and full degree. Grep the presentation layer for the drift numbers: zero hardcoded occurrences.
 - [ ] Act 5's precompute completes within 10 seconds on target hardware, or the chip names the reduced degree that made the budget.
-- [ ] Act 5's drift has been validated against one independent published result, and the comparison is recorded (in a comment or a note next to the code). See 5.6.
+- [ ] Act 5's readout shows separation split into height, along-track and cross-track, and names the dominant component. Grep the Act 5 UI for `RAAN`: zero occurrences.
+- [ ] Act 5's drift has been validated against one independent published result using separation or altitude decay, on a matching starting orbit, and the comparison is recorded (in a comment or a note next to the code). See 5.6.
 - [ ] Act 4's degree and coefficient-count labels read from `get_loaded_degree()` and `get_coefficient_count()`. Grep for `5151` and `100` as literals in the presentation layer: zero occurrences.
 - [ ] The Act 4 anomaly tint comes from `gravity_anomaly_grid`. No anomaly math in JavaScript.
 - [ ] The copy block is the only file containing physics literals. Grep the presentation layer for `1737`, `384400`, `149597870.7`: they appear only as imports from the constants module.
@@ -425,9 +452,9 @@ Claude, treat this list as the definition of done. Each item is checkable.
 
 ### 12.1 Act 5's conclusion names a real mission
 
-**Apollo 16's PFS-2.** Released April 1972 into a low lunar orbit, expected to last about a year and a half, destroyed by mascon-driven orbital decay after roughly 34 days. Apollo 15's PFS-1, released into a higher orbit, lasted far longer. That contrast is the lesson, stated as fact rather than as a claim.
+**Apollo 16's PFS-2.** Released April 1972 into a low lunar orbit, expected to last about a year and a half, destroyed by mascon-driven orbital decay after roughly 34 days. Apollo 15's PFS-1 lasted far longer, and the contrast is not altitude: PFS-1 was at 102 x 139 km and PFS-2 at 90 x 130 km, close enough to be the same class of orbit. What differed was inclination, PFS-1 at 28.5 degrees and PFS-2 at 10 degrees (some sources say 11). PFS-1 happened to sit near the 27-degree frozen inclination where mascon perturbations balance; PFS-2 did not. That contrast is the lesson, stated as fact rather than as a claim.
 
-One source must be chosen and cited, because the tracked-lifetime figure varies between 34 and 35 days across sources.
+Source conflicts to resolve when the copy block is written: inclination is given as 10 degrees (Gunter's Space Page, with periselene 90 km and aposelene 130 km) or 11 degrees (Wikipedia); tracked lifetime is given as 34 days or 35 days. Pick one source set, cite it, and use it consistently in both the copy and the validation gate.
 
 ### 12.2 No wordmark
 
@@ -435,6 +462,8 @@ The reference ends with a brand mark. This app's credibility comes from its prov
 
 ### 12.3 Eagle stays the default; PFS-2 becomes the Act 7 target
 
-The concern was that a stable default would leave Act 5 with nothing to show. The measurement answers it: Eagle already drifts hard, 130 degrees of RAAN and 32 km of altitude in seven days. The default does not need to change.
+The concern was that a stable default would leave Act 5 with nothing to show. The measurement answers it: Eagle already drifts hard, 645 km of separation and 32 km of altitude change in seven days. The default does not need to change.
+
+(An earlier draft cited 130 degrees of RAAN change here. That figure is real but misleading for this orbit: it is a coordinate artifact, not drift. See 5.6.)
 
 Instead, PFS-2 becomes the vehicle for Act 7's `Break it` control. That gives the button a real historical target, and it ties the interactive act back to the Act 5 conclusion.
