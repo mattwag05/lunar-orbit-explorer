@@ -269,7 +269,8 @@ The 645 km separation at 7 days is a plausible size rather than an obviously wro
 - Headline: "Move the orbit. Break it. Ride along."
 - Three named actions, matching the reference's "move your pin / break it / ride a satellite":
   1. `Move the orbit` opens the Keplerian element controls as sliders (SMA, ECC, INC).
-  2. `Break it` loads PFS-2's own published orbital elements (inclination 11 degrees) and starts the run at full degree. This is also the configuration the validation gate compares against PFS-2's recorded ~34-day lifetime, so the elements must be the real ones, sourced and cited, not a generic low orbit. Show the inclination against Eagle's explicitly: the point of the act is that a near-frozen orbit and a near-equatorial one both fail, but for different reasons and over different timescales.
+  2. `Break it` loads PFS-2's own published orbital elements (inclination from the chosen source set in 5.8) and starts the run at full degree. This is also the configuration the validation gate compares against PFS-2's recorded lifetime, so the elements must be the real ones, sourced and cited, not a generic low orbit. Show the inclination against Eagle's explicitly: neither orbit is at a frozen inclination, and both fail, over different timescales.
+     Inclination convention: Eagle's 179.07 degrees is retrograde in the propagator's frame, while published Apollo figures (Apollo 11 about 1.25 degrees, PFS-2 10 or 11 degrees) are often given unsigned. Confirm each source's convention and convert before calling `init_from_keplerian`. PFS-2 is expected to land near 170 degrees, not 10, if it followed the same retrograde pattern; verify this, do not assume it.
   3. `Ride along` enters the cockpit, described next.
 - Footer: `Esc to return.`
 
