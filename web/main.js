@@ -1,412 +1,410 @@
 /**
- * Lunar Orbit Explorer — main.js (Phase 2)
+ * Lunar Orbit Explorer: guided explainer (docs/prd-guided-explainer.md).
  *
- * Wires up the WASM propagator to a CesiumJS lunar visualization.
- * Phase 2 additions: force model selection, orbital elements readout,
- * eccentricity & altitude time-series plots.
+ * Boots the workers and the scene, runs the act sequence, and renders. The
+ * frame loop only draws what the workers produced; it never propagates.
  */
 
-import * as Cesium from 'cesium';
-import 'cesium/Build/Cesium/Widgets/widgets.css';
+import '@fontsource/ibm-plex-sans/300.css';
+import '@fontsource/ibm-plex-sans/400.css';
+import '@fontsource/ibm-plex-sans/600.css';
+import '@fontsource/ibm-plex-mono/400.css';
+
 import init, { Propagator } from '../propagator/pkg/propagator.js';
-
-window.Cesium = Cesium;
-
-// ─── Constants ────────────────────────────────────────────────────────────
-
-const LUNAR_GM      = 4902.800066;
-const LUNAR_RADIUS  = 1737.4;
-const METERS_PER_KM = 1000.0;
-const RAD2DEG       = 180.0 / Math.PI;
-
-const ORBIT = {
-  sma:  1838.13,
-  ecc:  0.0076,
-  inc:  179.07 * Math.PI / 180.0,
-  raan: 183.41 * Math.PI / 180.0,
-  argp: 179.86 * Math.PI / 180.0,
-  ta:   0.0,
-};
+import { createScene, GRID } from './scene.js';
+import { Stage, buildRail } from './ui.js';
+import { ACTS, COCKPIT } from './acts.js';
+import { COPY, EAGLE, ACT_TITLES, APP_NAME } from './copy.js';
+import { warpChip } from './warp.js';
+import {
+  LUNAR_GM_KM3_S2, MOON_RADIUS_KM, OMEGA_MOON_RAD_S, SURFACE_GRAVITY_KM_S2, MGAL_KM_S2,
+} from './physics-constants.js';
 
 const MAX_TRAIL_POINTS = 2000;
-const WARP_LEVELS = [1, 10, 100, 500, 1000, 5000];
-const MAX_PLOT_POINTS = 600;
+const FULL_DEGREE_REQUEST = 0xffffffff; // the propagator clamps to what it holds
+/**
+ * Act 5 working degree, chosen up front (PRD 5.6). Measured natively on the
+ * default orbit: degree 20 lands within 2.2 km of degree 100 at day 7
+ * (676.4 vs 674.4 km apart) at about 1/30 of the cost. docs/validation.md.
+ */
+const DRIFT_DEGREE = 20;
+const DRIFT_DAYS = 7;
+const DRIFT_CHUNK_S = 300;
+const RELIEF_TARGET = 0.035; // tallest drawn bump as a fraction of the radius
 
-const ionToken = import.meta.env.VITE_CESIUM_TOKEN ?? '';
-if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const phoneQuery = matchMedia('(max-width: 767px)');
 
-// ─── Viewer ───────────────────────────────────────────────────────────────
+// ─── Simulation client ───────────────────────────────────────────────────
 
-function createViewer() {
-  const viewer = new Cesium.Viewer('cesiumContainer', {
-    baseLayerPicker: false, geocoder: false, homeButton: false,
-    sceneModePicker: false, navigationHelpButton: false,
-    animation: false, timeline: false, fullscreenButton: false,
-    infoBox: false, selectionIndicator: false,
-    globe: false, baseLayer: false,
+class Sim {
+  constructor() {
+    this.worker = new Worker(new URL('./sim-worker.js', import.meta.url), { type: 'module' });
+    this.gen = 0;
+    this.latest = null;
+    this.waiters = new Map();
+    this.onFrame = () => {};
+    this.onImpact = () => {};
+    this.worker.onmessage = (e) => this.receive(e.data);
+  }
+
+  receive(m) {
+    if (m.type === 'ready') { this.waiters.get('ready')?.(m); return; }
+    if (m.gen !== this.gen) return;
+    if (m.type === 'reset') { this.latest = null; this.waiters.get(`reset${m.gen}`)?.(m); }
+    else if (m.type === 'frame') { this.latest = m; this.onFrame(m); }
+    else if (m.type === 'impact') this.onImpact(m);
+  }
+
+  wait(key) { return new Promise((resolve) => this.waiters.set(key, resolve)); }
+
+  init(gm) {
+    const p = this.wait('ready');
+    this.worker.postMessage({ type: 'init', gm });
+    return p;
+  }
+
+  reset(elements, cfg, { measure = false } = {}) {
+    this.gen++;
+    const p = this.wait(`reset${this.gen}`);
+    this.worker.postMessage({ type: 'reset', gen: this.gen, elements, cfg, measure });
+    return p;
+  }
+
+  config(cfg) { this.worker.postMessage({ type: 'config', cfg }); }
+  run(running) { this.worker.postMessage({ type: 'run', running }); }
+}
+
+// ─── Boot ────────────────────────────────────────────────────────────────
+
+async function boot() {
+  const loading = document.getElementById('loading');
+  document.title = APP_NAME;
+
+  const sim = new Sim();
+  const [, ready] = await Promise.all([init(), sim.init(LUNAR_GM_KM3_S2)]);
+
+  // Main-thread probe: field inspection only, never stepped.
+  const probe = new Propagator();
+  probe.set_gravity_degree(FULL_DEGREE_REQUEST);
+  const loadedDegree = probe.get_loaded_degree();
+  const coefficientCount = probe.get_coefficient_count();
+
+  // Act 5's table starts computing now, so it is usually ready on arrival.
+  const drift = { done: 0, total: 0, table: null };
+  const driftWorker = new Worker(new URL('./drift-worker.js', import.meta.url), { type: 'module' });
+  driftWorker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'progress') { drift.done = m.done; drift.total = m.total; }
+    if (m.type === 'done') {
+      drift.table = m;
+      console.info(`[LOE] Act 5 drift precompute: ${(m.elapsedMs / 1000).toFixed(2)} s at degree ${m.degree}`);
+    }
+  };
+  driftWorker.postMessage({
+    gm: LUNAR_GM_KM3_S2, elements: EAGLE.elements, degree: DRIFT_DEGREE, days: DRIFT_DAYS, chunkS: DRIFT_CHUNK_S,
   });
-  viewer.scene.backgroundColor = Cesium.Color.BLACK;
-  viewer.scene.skyBox.show = false;
-  viewer.scene.sun.show = false;
-  viewer.scene.moon.show = false;
-  viewer.scene.skyAtmosphere.show = false;
-  window.viewer = viewer;
-  return viewer;
-}
 
-// ─── Moon sphere ──────────────────────────────────────────────────────────
+  const first = await sim.reset(EAGLE.elements, {
+    warp: 1, degree: ready.fullDegree, earth: false, sun: false, shadow: false,
+  }, { measure: true });
+  sim.run(true);
 
-function createMoonSphere(viewer) {
-  return viewer.scene.primitives.add(
-    new Cesium.Primitive({
-      geometryInstances: new Cesium.GeometryInstance({
-        geometry: new Cesium.EllipsoidGeometry({
-          radii: new Cesium.Cartesian3(
-            LUNAR_RADIUS * METERS_PER_KM,
-            LUNAR_RADIUS * METERS_PER_KM,
-            LUNAR_RADIUS * METERS_PER_KM
-          ),
-          vertexFormat: Cesium.MaterialAppearance.VERTEX_FORMAT,
-        }),
-      }),
-      appearance: new Cesium.MaterialAppearance({
-        material: Cesium.Material.fromType('Color', {
-          color: new Cesium.Color(0.58, 0.56, 0.52, 1.0),
-        }),
-        faceForward: true, flat: true, closed: true, translucent: false,
-      }),
-      asynchronous: false,
-    })
-  );
-}
+  const view3d = createScene('scene', { reducedMotion });
+  const { moon, primary, secondary, rig } = view3d;
 
-// ─── Coordinate conversion ────────────────────────────────────────────────
+  // ─── Moon field cache ──────────────────────────────────────────────────
+  const fields = new Map();
+  function field(degree) {
+    if (!fields.has(degree)) {
+      const grid = probe.gravity_anomaly_grid(GRID.nLat, GRID.nLon, degree);
+      let min = Infinity, max = -Infinity;
+      for (const v of grid) { if (v < min) min = v; if (v > max) max = v; }
+      // Tint saturates at the 98th percentile so a few mascons don't wash out the rest.
+      const abs = Array.from(grid, Math.abs).sort((a, b) => a - b);
+      const p98 = abs[Math.floor(abs.length * 0.98)] || 0;
+      fields.set(degree, { grid, min, max, p98, maxAbs: Math.max(Math.abs(min), Math.abs(max)) });
+    }
+    return fields.get(degree);
+  }
+  function niceFloor(x) {
+    const e = 10 ** Math.floor(Math.log10(x));
+    const f = x / e;
+    return (f >= 5 ? 5 : f >= 2 ? 2 : 1) * e;
+  }
+  let moonKey = null;
+  function moonMode(mode) {
+    if (mode === 'smooth') {
+      if (moonKey !== 'smooth') moon.set(null, 0, null);
+      moonKey = 'smooth';
+      return null;
+    }
+    if (mode === 'tint') {
+      const f = field(loadedDegree);
+      if (moonKey !== 'tint') moon.set(f.grid, f.p98, null);
+      moonKey = 'tint';
+      return f;
+    }
+    const f = field(mode.degree);
+    const key = `relief${mode.degree}`;
+    let factor = 0;
+    if (f.maxAbs > 0) {
+      // Anomaly as a fraction of surface gravity, drawn as the same fraction
+      // of the radius times `factor` (stated on screen).
+      const fraction = (f.maxAbs * MGAL_KM_S2) / SURFACE_GRAVITY_KM_S2;
+      factor = niceFloor(RELIEF_TARGET / fraction);
+    }
+    if (moonKey !== key) {
+      let radii = null;
+      if (factor) {
+        radii = new Float64Array(f.grid.length);
+        for (let k = 0; k < radii.length; k++) {
+          radii[k] = MOON_RADIUS_KM * (1 + (factor * f.grid[k] * MGAL_KM_S2) / SURFACE_GRAVITY_KM_S2);
+        }
+      }
+      moon.set(f.maxAbs > 0 ? f.grid : null, f.p98, radii);
+      moonKey = key;
+    }
+    return { ...f, factor };
+  }
 
-function mciToCartesian3(x, y, z) {
-  return new Cesium.Cartesian3(x * METERS_PER_KM, y * METERS_PER_KM, z * METERS_PER_KM);
-}
+  // ─── Trails ────────────────────────────────────────────────────────────
+  let trailMode = 'append';
+  let trailStartT = 0;
+  let replaying = false;
+  sim.onFrame = (f) => {
+    if (replaying) return;
+    if (trailMode === 'one-revolution' && f.t - trailStartT >= first.epoch.periodS) trailMode = 'hold';
+    if (trailMode === 'append' || trailMode === 'one-revolution') {
+      for (let i = 0; i < f.trail.length; i += 3) primary.push(f.trail[i], f.trail[i + 1], f.trail[i + 2], MAX_TRAIL_POINTS);
+    }
+  };
+  sim.onImpact = (m) => {
+    if (current === ACTS[7]) ACTS[7].onImpact(ctx, m.t, m.revolutions);
+  };
 
-// ─── Orbit trail & spacecraft ─────────────────────────────────────────────
-
-function createTrailEntity(viewer) {
-  return viewer.entities.add({
-    polyline: {
-      positions: new Cesium.CallbackProperty(() => trailPositions, false),
-      width: 3.0,
-      material: new Cesium.PolylineGlowMaterialProperty({
-        glowPower: 0.4, color: Cesium.Color.CYAN.withAlpha(1.0),
-      }),
-      arcType: Cesium.ArcType.NONE,
-      depthFailMaterial: new Cesium.PolylineGlowMaterialProperty({
-        glowPower: 0.25, color: Cesium.Color.CYAN.withAlpha(0.25),
-      }),
+  // ─── Context the acts drive ────────────────────────────────────────────
+  let warpStep = null;
+  const ctx = {
+    sim, rig, reducedMotion, drift, loadedDegree, coefficientCount,
+    fullDegree: ready.fullDegree,
+    epoch: first.epoch,
+    autoplay: !reducedMotion,
+    onFirstDrag: null,
+    moonMode,
+    setLight: (x) => view3d.setLight(x),
+    setWarp(step) { warpStep = step; },
+    clearTrail() { primary.clear(); trailStartT = sim.latest?.t ?? 0; },
+    liveTrail(mode) {
+      trailMode = mode;
+      trailStartT = sim.latest?.t ?? 0;
+      replaying = mode === 'off';
+      if (replaying) primary.clear();
+      primary.visible = true;
     },
-  });
-}
-
-function createSpacecraftEntity(viewer) {
-  return viewer.entities.add({
-    position: new Cesium.CallbackProperty(() => spacecraftPosition, false),
-    point: {
-      pixelSize: 7, color: Cesium.Color.WHITE,
-      outlineColor: Cesium.Color.CYAN, outlineWidth: 2.0,
-      heightReference: Cesium.HeightReference.NONE,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    styleDriftTracks(selected) {
+      const { signal, warn } = view3d.colors;
+      primary.setStyle(signal, selected === 0 ? 1 : 0.28, selected === 0 ? 3 : 2);
+      secondary.setStyle(warn, selected === 1 ? 1 : 0.28, selected === 1 ? 3 : 2);
+      secondary.visible = true;
     },
+    drawDrift(table, k, t) {
+      const from = Math.max(0, k - MAX_TRAIL_POINTS);
+      primary.clear();
+      secondary.clear();
+      for (let i = from; i <= k; i++) {
+        primary.push(table.a[6 * i], table.a[6 * i + 1], table.a[6 * i + 2], MAX_TRAIL_POINTS);
+        secondary.push(table.b[6 * i], table.b[6 * i + 1], table.b[6 * i + 2], MAX_TRAIL_POINTS);
+      }
+      // Tips interpolate between the table rows so motion stays smooth.
+      const j = Math.min(table.times.length - 2, k);
+      const u = Math.max(0, Math.min(1, (t - table.times[j]) / table.chunkS));
+      const lerp = (arr, c) => arr[6 * j + c] + (arr[6 * (j + 1) + c] - arr[6 * j + c]) * u;
+      primary.setTip(lerp(table.a, 0), lerp(table.a, 1), lerp(table.a, 2));
+      secondary.setTip(lerp(table.b, 0), lerp(table.b, 1), lerp(table.b, 2));
+      moon.setRotation(OMEGA_MOON_RAD_S * t);
+    },
+    endDrift() {
+      secondary.visible = false;
+      primary.setStyle(view3d.colors.signal, 1, 3);
+      primary.clear();
+      replaying = false;
+    },
+    setCameraMode(mode) {
+      rig.mode = mode === 'chase' || mode === 'view' ? mode : 'rig';
+      rig.follow = mode === 'orbit';
+      if (mode === 'orbit') rig.aim({ range: 450, minRange: 60, el: 0.4 });
+      if (mode === 'rig') rig.aim({ tx: 0, ty: 0, tz: 0, minRange: 2100, range: 7200 });
+    },
+    advance: () => step(1),
+    enterCockpit() { show(COCKPIT, 7); },
+    exitCockpit() { if (current === COCKPIT) goto(7); },
+  };
+
+  // ─── Act controller ────────────────────────────────────────────────────
+  const stage = new Stage(document.getElementById('stage'));
+  let current = null;
+  let index = 0;
+  let actTime = 0;
+  let view = null;
+
+  const rail = buildRail(document.getElementById('rail'), ACT_TITLES, {
+    onJump(i) { setAutoplay(false); goto(i); },
+    onToggleAutoplay() { setAutoplay(!ctx.autoplay); },
   });
-}
-
-// ─── Module-level mutable state ───────────────────────────────────────────
-
-let trailPositions     = [];
-let spacecraftPosition = Cesium.Cartesian3.ZERO;
-let propagator         = null;
-let isPlaying          = true;
-let warpIndex          = 2;
-let eccHistory         = [];
-let altHistory         = [];
-
-// ─── DOM references ───────────────────────────────────────────────────────
-
-const hudAlt     = document.getElementById('hud-alt');
-const hudVel     = document.getElementById('hud-vel');
-const hudTime    = document.getElementById('hud-time');
-const warpLabel  = document.getElementById('warp-label');
-const statusBar  = document.getElementById('status-bar');
-const warpSlider = document.getElementById('warp-slider');
-const hudPeriod  = document.getElementById('hud-period');
-
-const oeSma  = document.getElementById('oe-sma');
-const oeEcc  = document.getElementById('oe-ecc');
-const oeInc  = document.getElementById('oe-inc');
-const oeRaan = document.getElementById('oe-raan');
-const oeArgp = document.getElementById('oe-argp');
-const oeTa   = document.getElementById('oe-ta');
-
-const plotEccCanvas = document.getElementById('plot-ecc');
-const plotAltCanvas = document.getElementById('plot-alt');
-
-// ─── HUD + orbital elements update ────────────────────────────────────────
-
-function formatTime(s) {
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m ${sec}s`;
-  return `${m}m ${sec}s`;
-}
-
-function updateHUD() {
-  if (!propagator) return;
-  const alt = propagator.get_altitude();
-  hudAlt.textContent  = alt.toFixed(1);
-  hudVel.textContent  = propagator.get_speed().toFixed(3);
-  hudTime.textContent = formatTime(propagator.get_time());
-
-  // Orbital elements
-  const oe = propagator.get_orbital_elements();
-  const sma = oe[0], ecc = oe[1], inc = oe[2];
-  const raan = oe[3], argp = oe[4], ta = oe[5];
-  oeSma.textContent  = sma.toFixed(2);
-  oeEcc.textContent  = ecc.toFixed(6);
-  oeInc.textContent  = (inc * RAD2DEG).toFixed(2);
-  oeRaan.textContent = (raan * RAD2DEG).toFixed(2);
-  oeArgp.textContent = (argp * RAD2DEG).toFixed(2);
-  oeTa.textContent   = (ta * RAD2DEG).toFixed(2);
-
-  // Dynamic period from current SMA
-  const period_s = 2.0 * Math.PI * Math.sqrt(sma * sma * sma / LUNAR_GM);
-  hudPeriod.textContent = '~' + (period_s / 60.0).toFixed(1);
-
-  // Accumulate time-series data
-  const t = propagator.get_time();
-  eccHistory.push({ t, val: ecc });
-  altHistory.push({ t, val: alt });
-  if (eccHistory.length > MAX_PLOT_POINTS) eccHistory.shift();
-  if (altHistory.length > MAX_PLOT_POINTS) altHistory.shift();
-
-  drawPlot(plotEccCanvas, eccHistory, '#38bdf8', 'ecc');
-  drawPlot(plotAltCanvas, altHistory, '#4ade80', 'alt');
-}
-
-// ─── Canvas time-series plotter ───────────────────────────────────────────
-
-function drawPlot(canvas, data, color, label) {
-  if (!canvas || data.length < 2) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width;
-  const H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-
-  let minV = Infinity, maxV = -Infinity;
-  for (const d of data) {
-    if (d.val < minV) minV = d.val;
-    if (d.val > maxV) maxV = d.val;
-  }
-  // Add 10% padding
-  const range = maxV - minV || 1e-6;
-  minV -= range * 0.1;
-  maxV += range * 0.1;
-  const tMin = data[0].t;
-  const tMax = data[data.length - 1].t;
-  const tRange = tMax - tMin || 1;
-
-  // Grid lines
-  ctx.strokeStyle = 'rgba(80,180,255,0.12)';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = (H * i) / 4;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  function setAutoplay(on) {
+    ctx.autoplay = on;
+    rail.setAutoplay(on);
+    document.body.classList.toggle('autoplay', on);
   }
 
-  // Data line
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (let i = 0; i < data.length; i++) {
-    const x = ((data[i].t - tMin) / tRange) * W;
-    const y = H - ((data[i].val - minV) / (maxV - minV)) * H;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  function show(act, railIndex) {
+    current?.leave?.(ctx);
+    sim.run(true);
+    current = act;
+    index = railIndex;
+    actTime = 0;
+    view = act.enter(ctx);
+    stage.show(view);
+    rail.setCurrent(railIndex);
+    rail.setProgress(0);
+    document.body.dataset.act = act === COCKPIT ? 'cockpit' : String(railIndex);
   }
-  ctx.stroke();
-
-  // Labels: min/max on right edge
-  ctx.fillStyle = 'rgba(200,230,255,0.6)';
-  ctx.font = '9px Courier New';
-  ctx.textAlign = 'right';
-  const fmt = label === 'ecc' ? (v => v.toFixed(5)) : (v => v.toFixed(1));
-  ctx.fillText(fmt(maxV + range * 0.1), W - 2, 10);
-  ctx.fillText(fmt(minV + range * 0.1), W - 2, H - 3);
-}
-
-// ─── Force model controls ─────────────────────────────────────────────────
-
-function applyForceModel() {
-  if (!propagator) return;
-  const mode = document.querySelector('input[name="gravity"]:checked').value;
-  const shControls = document.getElementById('sh-controls');
-
-  if (mode === 'pointmass') {
-    propagator.set_gravity_degree(0);
-    shControls.style.display = 'none';
-  } else {
-    const deg = parseInt(document.getElementById('sh-degree').value, 10);
-    propagator.set_gravity_degree(deg);
-    shControls.style.display = 'flex';
+  function goto(i) { show(ACTS[Math.max(0, Math.min(ACTS.length - 1, i))], Math.max(0, Math.min(ACTS.length - 1, i))); }
+  function step(d) {
+    if (current === COCKPIT) { if (d < 0) goto(7); return; }
+    if (index + d >= 0 && index + d < ACTS.length) goto(index + d);
   }
 
-  const earthOn = document.getElementById('chk-earth').checked;
-  const sunOn   = document.getElementById('chk-sun').checked;
-  propagator.enable_third_body(earthOn, sunOn);
-}
+  document.getElementById('provenance').textContent = COPY.provenance(loadedDegree);
 
-function bindForceControls() {
-  document.querySelectorAll('input[name="gravity"]').forEach(el => {
-    el.addEventListener('change', applyForceModel);
+  // ─── Layout: keep the Moon clear of the text ───────────────────────────
+  // Act camera ranges were tuned on a 16:9 desktop, where the Moon fits the
+  // viewport height. Elsewhere, scale range so the same framing fits the
+  // space actually left for the scene.
+  const TAN_HALF_FOV = Math.tan(Math.PI / 6);  // Cesium default fov, larger dimension
+  const DESIGN_FIT = TAN_HALF_FOV * (9 / 16);
+  function layout() {
+    const w = innerWidth, hgt = innerHeight;
+    const tanW = w >= hgt ? TAN_HALF_FOV : TAN_HALF_FOV * (w / hgt);
+    const tanH = w >= hgt ? TAN_HALF_FOV * (hgt / w) : TAN_HALF_FOV;
+    const box = document.getElementById('column').getBoundingClientRect();
+    if (phoneQuery.matches) {
+      const visible = Math.max(1, hgt - box.height);
+      rig.layout.shiftX = 0;
+      rig.layout.shiftY = (hgt / 2 - visible / 2) / hgt;
+      // 20% margin: on a phone the Moon should never touch the screen edge.
+      rig.layout.rangeScale = 1.2 * Math.max(1, DESIGN_FIT / Math.min(tanW, tanH * (visible / hgt)));
+    } else {
+      const free = Math.max(1, w - box.right);
+      rig.layout.shiftX = (box.right + free / 2 - w / 2) / w;
+      rig.layout.shiftY = 0;
+      rig.layout.rangeScale = Math.max(1, DESIGN_FIT / Math.min(tanW * (free / w), tanH));
+    }
+  }
+  addEventListener('resize', layout);
+  new ResizeObserver(layout).observe(document.getElementById('column'));
+
+  // ─── Input: drag and pinch on the scene, taps advance during autoplay ──
+  const sceneEl = document.getElementById('scene');
+  const pointers = new Map();
+  let moved = 0;
+  let pinchStart = 0;
+  let dragFired = false;
+  sceneEl.addEventListener('pointerdown', (e) => {
+    sceneEl.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) { moved = 0; dragFired = false; }
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+    }
   });
-  const shSlider = document.getElementById('sh-degree');
-  const shLabel  = document.getElementById('sh-degree-label');
-  shSlider.addEventListener('input', () => {
-    shLabel.textContent = shSlider.value;
-    applyForceModel();
+  sceneEl.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchStart > 0 && d > 0) rig.zoom(pinchStart / d);
+      pinchStart = d;
+      moved += 10;
+      return;
+    }
+    moved += Math.abs(dx) + Math.abs(dy);
+    if (rig.mode === 'rig') rig.drag(dx, dy);
+    if (moved > 8 && !dragFired && ctx.onFirstDrag) { dragFired = true; const f = ctx.onFirstDrag; ctx.onFirstDrag = null; f(); }
   });
-  document.getElementById('chk-earth').addEventListener('change', applyForceModel);
-  document.getElementById('chk-sun').addEventListener('change', applyForceModel);
-}
+  const release = (e) => {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size > 0) return;
+    if (dragFired) return;
+    if (ctx.autoplay && current?.duration && current !== COCKPIT) step(1);
+  };
+  sceneEl.addEventListener('pointerup', release);
+  sceneEl.addEventListener('pointercancel', (e) => pointers.delete(e.pointerId));
+  sceneEl.addEventListener('wheel', (e) => { e.preventDefault(); rig.zoom(Math.exp(e.deltaY * 0.001)); }, { passive: false });
 
-// ─── Propagation loop ─────────────────────────────────────────────────────
+  addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    const inControl = t instanceof HTMLElement && t.closest('input, button, select, textarea, a');
+    if (e.key === 'Escape') { if (current === COCKPIT) { e.preventDefault(); ctx.exitCockpit(); } return; }
+    if (e.key === 'ArrowRight' && !(t instanceof HTMLInputElement)) { e.preventDefault(); step(1); return; }
+    if (e.key === 'ArrowLeft' && !(t instanceof HTMLInputElement)) { e.preventDefault(); step(-1); return; }
+    if (inControl || ['Tab', 'Shift', 'CapsLock'].includes(e.key)) return;
+    if (ctx.autoplay && current?.duration && current !== COCKPIT) step(1);
+  });
 
-function resetOrbit() {
-  if (!propagator) return;
-  propagator.init(LUNAR_GM);
-  propagator.init_from_keplerian(
-    ORBIT.sma, ORBIT.ecc, ORBIT.inc, ORBIT.raan, ORBIT.argp, ORBIT.ta
-  );
-  trailPositions = [];
-  eccHistory = [];
-  altHistory = [];
-  const s = propagator.get_state();
-  spacecraftPosition = mciToCartesian3(s[0], s[1], s[2]);
-  applyForceModel();
-  updateHUD();
-}
+  // ─── Frame loop: render only ───────────────────────────────────────────
+  let last = performance.now();
+  let readoutClock = 0;
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 0.1);
+    last = now;
+    const f = sim.latest;
 
-let lastTimestamp = null;
+    if (f && !replaying) {
+      primary.setTip(f.state[0], f.state[1], f.state[2]);
+      moon.setRotation(OMEGA_MOON_RAD_S * f.t);
+      if (rig.follow) rig.aim({ tx: f.state[0], ty: f.state[1], tz: f.state[2] });
+      rig.craft = { r: f.state.slice(0, 3), v: f.state.slice(3, 6) };
+    }
+    current.frame?.(ctx, dt);
+    rig.update(dt);
 
-function tick(timestamp) {
-  if (!propagator) { requestAnimationFrame(tick); return; }
-  if (lastTimestamp === null) lastTimestamp = timestamp;
-  const wallDt = Math.min((timestamp - lastTimestamp) / 1000.0, 0.1);
-  lastTimestamp = timestamp;
-
-  if (isPlaying) {
-    const warp   = WARP_LEVELS[warpIndex];
-    const simDt  = wallDt * warp;
-    const SUB_STEP = 60.0;
-    let remaining  = simDt;
-
-    while (remaining > 0) {
-      const dt = Math.min(remaining, SUB_STEP);
-      propagator.step(dt);
-      remaining -= dt;
-
-      const s   = propagator.get_state();
-      const pos = mciToCartesian3(s[0], s[1], s[2]);
-      trailPositions.push(pos);
-      if (trailPositions.length > MAX_TRAIL_POINTS) trailPositions.shift();
-      spacecraftPosition = pos;
+    readoutClock += dt;
+    if (readoutClock > 0.1) {
+      readoutClock = 0;
+      if (f || replaying) current.readouts?.(ctx, f, view);
+      view.chip('warp', warpStep ? warpChip(warpStep, replaying ? undefined : f?.achieved) : null);
     }
 
-    updateHUD();
-  }
-  requestAnimationFrame(tick);
-}
-
-// ─── Camera ───────────────────────────────────────────────────────────────
-
-function positionCamera(viewer) {
-  const offset = new Cesium.Cartesian3(
-    0,
-    -(LUNAR_RADIUS + 4000) * METERS_PER_KM,
-     (LUNAR_RADIUS + 2000) * METERS_PER_KM
-  );
-  viewer.camera.lookAt(Cesium.Cartesian3.ZERO, offset);
-  viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-
-  viewer.scene.preRender.addEventListener(() => {
-    viewer.camera.frustum.near = 1.0;
-    viewer.camera.frustum.far  = 1.0e8;
-  });
-  viewer.camera.frustum.near = 1.0;
-  viewer.camera.frustum.far  = 1.0e8;
-}
-
-// ─── Playback controls ───────────────────────────────────────────────────
-
-function bindControls() {
-  document.getElementById('btn-play').addEventListener('click', () => {
-    isPlaying = true; setActiveBtn('btn-play');
-  });
-  document.getElementById('btn-pause').addEventListener('click', () => {
-    isPlaying = false; setActiveBtn('btn-pause');
-  });
-  document.getElementById('btn-reset').addEventListener('click', () => {
-    resetOrbit(); isPlaying = true; setActiveBtn('btn-play');
-  });
-  warpSlider.addEventListener('input', () => {
-    warpIndex = parseInt(warpSlider.value, 10);
-    warpLabel.textContent = `${WARP_LEVELS[warpIndex]}×`;
-  });
-  warpLabel.textContent = `${WARP_LEVELS[warpIndex]}×`;
-}
-
-function setActiveBtn(id) {
-  ['btn-play', 'btn-pause', 'btn-reset'].forEach(bid => {
-    document.getElementById(bid).classList.toggle('active', bid === id);
-  });
-}
-
-// ─── Entry point ──────────────────────────────────────────────────────────
-
-async function main() {
-  console.log('[LOE] main() — start');
-  statusBar.textContent = 'Loading WASM propagator…';
-
-  await init();
-  propagator = new Propagator();
-  statusBar.textContent = 'WASM ready — initialising orbit…';
-
-  resetOrbit();
-  console.log('[LOE] Orbit initialised', {
-    alt_km: propagator.get_altitude().toFixed(1),
-    spd_kms: propagator.get_speed().toFixed(3),
-  });
-
-  statusBar.textContent = 'Building 3D scene…';
-  let viewer;
-  try { viewer = createViewer(); }
-  catch (err) {
-    statusBar.textContent = `Cesium error: ${err.message}`;
-    console.error('[LOE] createViewer() threw:', err);
-    return;
+    if (ctx.autoplay && current.duration && current !== COCKPIT) {
+      actTime += dt * 1000;
+      rail.setProgress(actTime / current.duration);
+      const waiting = current.ready && !current.ready();
+      if (actTime >= current.duration && !waiting) step(1);
+    } else {
+      rail.setProgress(0);
+    }
+    requestAnimationFrame(frame);
   }
 
-  createMoonSphere(viewer);
-  createTrailEntity(viewer);
-  createSpacecraftEntity(viewer);
-  positionCamera(viewer);
+  // Inspection handle for debugging in DevTools; not used by the app.
+  window.__loe = { viewer: view3d.viewer, rig, sim, ctx };
 
-  bindControls();
-  bindForceControls();
-
-  statusBar.textContent = 'Running';
-  console.log('[LOE] main() — running');
-  requestAnimationFrame(tick);
+  setAutoplay(ctx.autoplay);
+  goto(0);
+  layout();
+  loading.hidden = true;
+  requestAnimationFrame(frame);
 }
 
-main().catch(err => {
+boot().catch((err) => {
   console.error('[LOE] Fatal:', err);
-  if (statusBar) statusBar.textContent = `Error: ${err.message}`;
+  const loading = document.getElementById('loading');
+  if (loading) loading.textContent = `Could not start: ${err.message}`;
 });
